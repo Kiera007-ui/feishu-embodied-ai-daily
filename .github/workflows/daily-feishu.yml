@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout latest main
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
@@ -53,7 +53,7 @@ jobs:
       - name: Request GitHub OIDC token
         if: steps.mode.outputs.skip != 'true'
         id: oidc
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const token = await core.getIDToken('feishu-embodied-ai-daily');
@@ -78,9 +78,19 @@ jobs:
           HTTP_CODE="$(curl --silent --show-error --location             --request POST             --header "Authorization: Bearer $OIDC_TOKEN"             --header "Content-Type: application/json"             --output response.json             --write-out "%{http_code}"             "$URL")"
 
           echo "HTTP $HTTP_CODE"
-          cat response.json | jq '{ok, dry_run, sent, deduped, date, item_count, error}'
+          if jq empty response.json >/dev/null 2>&1; then
+            jq '{ok, dry_run, sent, deduped, date, item_count, error}' response.json
+          else
+            echo "Non-JSON response:"
+            head -c 3000 response.json
+            echo
+          fi
 
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            exit 1
+          fi
+
+          if ! jq empty response.json >/dev/null 2>&1; then
             exit 1
           fi
 
