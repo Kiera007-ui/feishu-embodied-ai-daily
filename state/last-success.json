@@ -1,0 +1,10 @@
+{
+  "date": "2026.09.28",
+  "sent_at": "2026-09-28T09:41:20+08:00",
+  "github_run_id": "manual-before-github-scheduler",
+  "source_commit": null,
+  "item_count": 3,
+  "sent": true,
+  "deduped": false,
+  "note": "Seeded from the confirmed manual Feishu send on 2026-09-28 to prevent same-day scheduler duplication."
+}
