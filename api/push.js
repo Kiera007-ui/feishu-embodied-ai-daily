@@ -1,5 +1,6 @@
 import { generateText, stepCountIs } from "ai";
 import { gateway } from "@ai-sdk/gateway";
+import { createRemoteJWKSet, jwtVerify } from "jose";
 
 const REQUIRED_SOURCES = [
   "机器之心/机器之心Pro",
@@ -20,6 +21,12 @@ const MIN_ITEMS = 3;
 const MAX_ITEMS = 5;
 const sentDates = globalThis.__embodiedDailySentDates || new Map();
 globalThis.__embodiedDailySentDates = sentDates;
+
+const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
+const GITHUB_OIDC_AUDIENCE = "feishu-embodied-ai-daily";
+const GITHUB_REPOSITORY = "Kiera007-ui/feishu-embodied-ai-daily";
+const GITHUB_WORKFLOW_REF = "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/daily-feishu.yml@refs/heads/main";
+const githubJwks = createRemoteJWKSet(new URL("https://token.actions.githubusercontent.com/.well-known/jwks"));
 
 function nowInSingapore() {
   return new Intl.DateTimeFormat("zh-CN", {
@@ -205,7 +212,7 @@ async function generateBrief() {
     model: gateway(modelId()),
     prompt: buildResearchPrompt(),
     tools: {
-      web_search: gateway.tools.perplexitySearch({
+      perplexity_search: gateway.tools.perplexitySearch({
         maxResults: 10,
         searchRecencyFilter: "day"
       })
@@ -318,12 +325,36 @@ async function sendToFeishu(text) {
   return data;
 }
 
-function authorized(req) {
-  const cronSecret = process.env.CRON_SECRET;
+async function authorized(req) {
   const manualSecret = process.env.MANUAL_SECRET;
-  if (cronSecret && req.headers.authorization === `Bearer ${cronSecret}`) return "cron";
-  if (manualSecret && req.headers["x-manual-secret"] === manualSecret) return "manual";
-  return null;
+  if (manualSecret && req.headers["x-manual-secret"] === manualSecret) {
+    return { actor: "manual", event: "manual" };
+  }
+
+  const auth = String(req.headers.authorization || "");
+  if (!auth.startsWith("Bearer ")) return null;
+  const token = auth.slice(7);
+
+  try {
+    const { payload } = await jwtVerify(token, githubJwks, {
+      issuer: GITHUB_OIDC_ISSUER,
+      audience: GITHUB_OIDC_AUDIENCE
+    });
+
+    if (payload.repository !== GITHUB_REPOSITORY) return null;
+    if (payload.ref !== "refs/heads/main") return null;
+    if (payload.workflow_ref !== GITHUB_WORKFLOW_REF) return null;
+    if (!["schedule", "push", "workflow_dispatch"].includes(String(payload.event_name))) return null;
+
+    return {
+      actor: "github-actions",
+      event: String(payload.event_name),
+      run_id: String(payload.run_id || "")
+    };
+  } catch (error) {
+    console.error("[auth] GitHub OIDC rejected", error);
+    return null;
+  }
 }
 
 function cleanupSentDates() {
@@ -344,8 +375,8 @@ export default async function handler(req, res) {
     return res.status(503).json({ ok: false, error: "Automatic push is disabled" });
   }
 
-  const actor = authorized(req);
-  if (!actor) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  const authContext = await authorized(req);
+  if (!authContext) return res.status(401).json({ ok: false, error: "Unauthorized" });
   if (!process.env.FEISHU_WEBHOOK_URL) {
     return res.status(503).json({ ok: false, error: "FEISHU_WEBHOOK_URL is not configured" });
   }
@@ -357,7 +388,8 @@ export default async function handler(req, res) {
     return res.status(503).json({ ok: false, error: "Vercel AI Gateway authentication is unavailable; enable OIDC federation or set AI_GATEWAY_API_KEY" });
   }
 
-  const dryRun = req.query?.dry === "1" || req.query?.dry === "true";
+  const requestedDryRun = req.query?.dry === "1" || req.query?.dry === "true";
+  const dryRun = authContext.event !== "schedule" ? true : requestedDryRun;
   const today = dateInSingapore();
 
   cleanupSentDates();
@@ -387,7 +419,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         ok: true,
         dry_run: true,
-        actor,
+        actor: authContext.actor: authContext.actor,
         date: brief.date,
         payload,
         checked_sources: brief.checked_sources,
@@ -401,7 +433,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         ok: true,
         sent: true,
-        actor,
+        actor: authContext.actor: authContext.actor,
         date: brief.date,
         item_count: brief.items.length,
         feishu
