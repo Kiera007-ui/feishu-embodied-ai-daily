@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "ai": "^6.0.0",
-    "@ai-sdk/gateway": "^3.0.0"
+    "@ai-sdk/gateway": "^3.0.0",
+    "jose": "^6.1.0"
   }
 }
