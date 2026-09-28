@@ -382,10 +382,13 @@ export default async function handler(req, res) {
   }
   const oidcToken = req.headers["x-vercel-oidc-token"];
   if (!process.env.AI_GATEWAY_API_KEY && oidcToken) {
-    process.env.AI_GATEWAY_API_KEY = oidcToken;
+    // AI Gateway distinguishes static API keys from Vercel OIDC tokens.
+    // Preserve the runtime token under the OIDC variable; an invalid
+    // AI_GATEWAY_API_KEY would take precedence and cause authentication failure.
+    process.env.VERCEL_OIDC_TOKEN = String(oidcToken);
   }
-  if (!process.env.AI_GATEWAY_API_KEY) {
-    return res.status(503).json({ ok: false, error: "Vercel AI Gateway authentication is unavailable; enable OIDC federation or set AI_GATEWAY_API_KEY" });
+  if (!process.env.AI_GATEWAY_API_KEY && !process.env.VERCEL_OIDC_TOKEN) {
+    return res.status(503).json({ ok: false, error: "Vercel AI Gateway authentication is unavailable" });
   }
 
   const requestedDryRun = req.query?.dry === "1" || req.query?.dry === "true";
