@@ -422,7 +422,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         ok: true,
         dry_run: true,
-        actor: authContext.actor: authContext.actor,
+        actor: authContext.actor,
         date: brief.date,
         payload,
         checked_sources: brief.checked_sources,
@@ -436,7 +436,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         ok: true,
         sent: true,
-        actor: authContext.actor: authContext.actor,
+        actor: authContext.actor,
         date: brief.date,
         item_count: brief.items.length,
         feishu
