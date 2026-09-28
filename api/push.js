@@ -349,8 +349,12 @@ export default async function handler(req, res) {
   if (!process.env.FEISHU_WEBHOOK_URL) {
     return res.status(503).json({ ok: false, error: "FEISHU_WEBHOOK_URL is not configured" });
   }
-  if (!process.env.VERCEL_OIDC_TOKEN && !process.env.AI_GATEWAY_API_KEY) {
-    return res.status(503).json({ ok: false, error: "Vercel AI Gateway authentication is unavailable" });
+  const oidcToken = req.headers["x-vercel-oidc-token"];
+  if (!process.env.AI_GATEWAY_API_KEY && oidcToken) {
+    process.env.AI_GATEWAY_API_KEY = oidcToken;
+  }
+  if (!process.env.AI_GATEWAY_API_KEY) {
+    return res.status(503).json({ ok: false, error: "Vercel AI Gateway authentication is unavailable; enable OIDC federation or set AI_GATEWAY_API_KEY" });
   }
 
   const dryRun = req.query?.dry === "1" || req.query?.dry === "true";
