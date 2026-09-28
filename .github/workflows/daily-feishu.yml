@@ -1,12 +1,10 @@
-# dry-run validation touch
 name: Embodied AI Daily to Feishu
 
 on:
-  schedule:
-    - cron: "7 1 * * *"
-  workflow_dispatch:
   push:
+    branches: [main]
     paths:
+      - "queue/*.txt"
       - ".github/workflows/daily-feishu.yml"
 
 permissions:
@@ -18,9 +16,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  daily-push:
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
+  relay:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
     steps:
       - name: Checkout latest main
@@ -29,115 +27,169 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Resolve run mode and durable dedupe state
-        id: mode
+      - name: Resolve payload and mode
+        id: payload
         shell: bash
         run: |
           set -euo pipefail
-          TODAY="$(TZ=Asia/Singapore date +%Y.%m.%d)"
-          echo "today=$TODAY" >> "$GITHUB_OUTPUT"
 
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            echo "dry_run=false" >> "$GITHUB_OUTPUT"
-            if [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$TODAY" ]; then
+          QUEUE_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA"             | grep -E '^queue/[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.txt$'             | head -n 1 || true)"
+
+          if [ -n "$QUEUE_FILE" ]; then
+            DATE="$(basename "$QUEUE_FILE" .txt)"
+            echo "mode=live" >> "$GITHUB_OUTPUT"
+            echo "date=$DATE" >> "$GITHUB_OUTPUT"
+            echo "queue_file=$QUEUE_FILE" >> "$GITHUB_OUTPUT"
+
+            if [ -f state/last-success.json ] &&                [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; then
               echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "Already sent for $TODAY; skipping."
+              echo "Already sent for $DATE; stopping before relay."
             else
               echo "skip=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            # Push/workflow_dispatch are validation-only. They must never send Feishu.
-            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+            # Workflow-file changes are validation-only and can never send Feishu.
+            DATE="$(TZ=Asia/Singapore date +%Y.%m.%d)"
+            cat > /tmp/relay-fixture.txt <<EOF
+          具身智能每日推｜$DATE
+
+          1. 自动链路验证条目一
+          仅用于验证GitHub OIDC与Vercel中继，不发送飞书。
+          来源：验证
+          https://example.com/validation-1
+
+          2. 自动链路验证条目二
+          仅用于验证Payload格式检查，不发送飞书。
+          来源：验证
+          https://example.com/validation-2
+
+          3. 自动链路验证条目三
+          仅用于验证防重复和禁用域名规则，不发送飞书。
+          来源：验证
+          https://example.com/validation-3
+          EOF
+            echo "mode=dry" >> "$GITHUB_OUTPUT"
+            echo "date=$DATE" >> "$GITHUB_OUTPUT"
+            echo "queue_file=/tmp/relay-fixture.txt" >> "$GITHUB_OUTPUT"
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate local payload
+        if: steps.payload.outputs.skip != 'true'
+        shell: bash
+        env:
+          MODE: ${{ steps.payload.outputs.mode }}
+          DATE: ${{ steps.payload.outputs.date }}
+          QUEUE_FILE: ${{ steps.payload.outputs.queue_file }}
+        run: |
+          set -euo pipefail
+
+          test -f "$QUEUE_FILE"
+          FIRST_LINE="$(head -n 1 "$QUEUE_FILE" | tr -d '\r')"
+          test "$FIRST_LINE" = "具身智能每日推｜$DATE"
+
+          ITEM_COUNT="$(grep -Ec '^[0-9]+\. ' "$QUEUE_FILE")"
+          if [ "$ITEM_COUNT" -lt 3 ] || [ "$ITEM_COUNT" -gt 5 ]; then
+            echo "Expected 3-5 items, got $ITEM_COUNT"
+            exit 1
+          fi
+
+          if grep -Eiq 'https?://([^/]*\.)?(sina\.com|sina\.com\.cn|sina\.cn|163\.com)(/|$)' "$QUEUE_FILE"; then
+            echo "Banned Sina/NetEase final link found."
+            exit 1
+          fi
+
+          if [ "$MODE" = "live" ]; then
+            TODAY="$(TZ=Asia/Singapore date +%Y.%m.%d)"
+            if [ "$DATE" != "$TODAY" ]; then
+              echo "Refusing live send: queue date $DATE is not today $TODAY."
+              exit 1
+            fi
+          fi
+
       - name: Request GitHub OIDC token
-        if: steps.mode.outputs.skip != 'true'
+        if: steps.payload.outputs.skip != 'true'
         id: oidc
         uses: actions/github-script@v8
         with:
           script: |
-            const token = await core.getIDToken('feishu-embodied-ai-daily');
+            const token = await core.getIDToken('feishu-embodied-ai-daily-relay');
             core.setSecret(token);
             core.setOutput('token', token);
 
-      - name: Call server-side daily pipeline
-        if: steps.mode.outputs.skip != 'true'
-        id: call
+      - name: Relay payload through Vercel
+        if: steps.payload.outputs.skip != 'true'
+        id: relay
+        shell: bash
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
-          DRY_RUN: ${{ steps.mode.outputs.dry_run }}
-        shell: bash
+          MODE: ${{ steps.payload.outputs.mode }}
+          DATE: ${{ steps.payload.outputs.date }}
+          QUEUE_FILE: ${{ steps.payload.outputs.queue_file }}
         run: |
           set -euo pipefail
 
-          URL="https://feishu-embodied-ai-daily.vercel.app/api/push"
-          if [ "$DRY_RUN" = "true" ]; then
+          jq -n             --arg text "$(cat "$QUEUE_FILE")"             --arg date "$DATE"             '{text:$text,date:$date}' > request.json
+
+          URL="https://feishu-embodied-ai-daily.vercel.app/api/relay"
+          if [ "$MODE" = "dry" ]; then
             URL="$URL?dry=1"
           fi
 
-          HTTP_CODE="$(curl --silent --show-error --location             --request POST             --header "Authorization: Bearer $OIDC_TOKEN"             --header "Content-Type: application/json"             --output response.json             --write-out "%{http_code}"             "$URL")"
+          HTTP_CODE="$(curl --silent --show-error --location             --connect-timeout 15             --max-time 45             --request POST             --header "Authorization: Bearer $OIDC_TOKEN"             --header "Content-Type: application/json"             --data-binary @request.json             --output response.json             --write-out "%{http_code}"             "$URL")"
 
           echo "HTTP $HTTP_CODE"
           if jq empty response.json >/dev/null 2>&1; then
-            jq '{ok, dry_run, sent, deduped, date, item_count, error}' response.json
+            jq '{ok,dry_run,sent,date,item_count,error}' response.json
           else
             echo "Non-JSON response:"
-            head -c 3000 response.json
+            head -c 2000 response.json
             echo
+            exit 1
           fi
 
           if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
             exit 1
           fi
-
-          if ! jq empty response.json >/dev/null 2>&1; then
-            exit 1
-          fi
-
           if [ "$(jq -r '.ok // false' response.json)" != "true" ]; then
             exit 1
           fi
 
-          if [ "$DRY_RUN" = "false" ]; then
-            SENT="$(jq -r '.sent // false' response.json)"
-            DEDUPED="$(jq -r '.deduped // false' response.json)"
-            if [ "$SENT" != "true" ] && [ "$DEDUPED" != "true" ]; then
-              echo "Live scheduled call returned no confirmed send/dedupe state."
-              exit 1
-            fi
+          if [ "$MODE" = "dry" ]; then
+            test "$(jq -r '.dry_run // false' response.json)" = "true"
+          else
+            test "$(jq -r '.sent // false' response.json)" = "true"
           fi
 
-      - name: Persist successful send state
-        if: github.event_name == 'schedule' && steps.mode.outputs.skip != 'true' && success()
+      - name: Persist confirmed send state
+        if: steps.payload.outputs.mode == 'live' && steps.payload.outputs.skip != 'true' && success()
         shell: bash
+        env:
+          DATE: ${{ steps.payload.outputs.date }}
+          QUEUE_FILE: ${{ steps.payload.outputs.queue_file }}
         run: |
           set -euo pipefail
-          mkdir -p state
-          DATE="$(jq -r '.date' response.json)"
-          ITEM_COUNT="$(jq -r '.item_count // 0' response.json)"
-          SENT="$(jq -r '.sent // false' response.json)"
-          DEDUPED="$(jq -r '.deduped // false' response.json)"
-          NOW="$(TZ=Asia/Singapore date --iso-8601=seconds)"
 
-          jq -n             --arg date "$DATE"             --arg sent_at "$NOW"             --arg run_id "$GITHUB_RUN_ID"             --arg commit "$GITHUB_SHA"             --argjson item_count "$ITEM_COUNT"             --argjson sent "$SENT"             --argjson deduped "$DEDUPED"             '{
-              date: $date,
-              sent_at: $sent_at,
-              github_run_id: $run_id,
-              source_commit: $commit,
-              item_count: $item_count,
-              sent: $sent,
-              deduped: $deduped
+          mkdir -p state
+          NOW="$(TZ=Asia/Singapore date --iso-8601=seconds)"
+          SHA256="$(sha256sum "$QUEUE_FILE" | awk '{print $1}')"
+          ITEM_COUNT="$(grep -Ec '^[0-9]+\. ' "$QUEUE_FILE")"
+
+          jq -n             --arg date "$DATE"             --arg sent_at "$NOW"             --arg run_id "$GITHUB_RUN_ID"             --arg source_commit "$GITHUB_SHA"             --arg payload_sha256 "$SHA256"             --argjson item_count "$ITEM_COUNT"             '{
+              date:$date,
+              sent_at:$sent_at,
+              github_run_id:$run_id,
+              source_commit:$source_commit,
+              payload_sha256:$payload_sha256,
+              item_count:$item_count,
+              sent:true
             }' > state/last-success.json
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add state/last-success.json
-
-          if git diff --cached --quiet; then
-            echo "No state change to commit."
-            exit 0
-          fi
-
           git commit -m "Record Feishu daily push for $DATE"
+
+          # Rebase any unrelated commits made while the relay was running.
+          git pull --rebase origin main
           git push origin HEAD:main
