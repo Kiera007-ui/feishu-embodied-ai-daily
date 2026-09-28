@@ -1,7 +1,17 @@
 {
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "crons": [
+    {
+      "path": "/api/push",
+      "schedule": "0 1 * * *"
+    }
+  ],
   "functions": {
     "api/send.js": {
       "maxDuration": 30
+    },
+    "api/push.js": {
+      "maxDuration": 300
     }
   }
 }
