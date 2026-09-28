@@ -2,7 +2,7 @@ export default function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
   const config = {
     feishu_webhook: Boolean(process.env.FEISHU_WEBHOOK_URL),
-    ai_gateway_auth: Boolean(process.env.VERCEL_OIDC_TOKEN || process.env.AI_GATEWAY_API_KEY),
+    ai_gateway_auth: Boolean(process.env.AI_GATEWAY_API_KEY || req.headers["x-vercel-oidc-token"]),
     cron_secret: Boolean(process.env.CRON_SECRET),
     manual_secret: Boolean(process.env.MANUAL_SECRET)
   };
