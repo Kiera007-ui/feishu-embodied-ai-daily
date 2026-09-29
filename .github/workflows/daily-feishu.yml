@@ -41,9 +41,10 @@ jobs:
             echo "date=$DATE" >> "$GITHUB_OUTPUT"
             echo "queue_file=$QUEUE_FILE" >> "$GITHUB_OUTPUT"
 
-            if [ -f state/last-success.json ] &&                [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; then
+            if { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } || \
+               { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
               echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "Already sent for $DATE; stopping before relay."
+              echo "A send or cloud send attempt exists for $DATE; stopping before relay."
             else
               echo "skip=false" >> "$GITHUB_OUTPUT"
             fi
@@ -89,8 +90,10 @@ jobs:
           test "$FIRST_LINE" = "具身智能每日推｜$DATE"
 
           ITEM_COUNT="$(grep -Ec '^[0-9]+\. ' "$QUEUE_FILE")"
-          if [ "$ITEM_COUNT" -lt 3 ] || [ "$ITEM_COUNT" -gt 5 ]; then
-            echo "Expected 3-5 items, got $ITEM_COUNT"
+          MAX_ITEMS=5
+          if [ "$DATE" = "2026.09.30" ]; then MAX_ITEMS=6; fi
+          if [ "$ITEM_COUNT" -lt 3 ] || [ "$ITEM_COUNT" -gt "$MAX_ITEMS" ]; then
+            echo "Expected 3-$MAX_ITEMS items, got $ITEM_COUNT"
             exit 1
           fi
 

@@ -1,0 +1,183 @@
+name: Cloud embodied AI daily
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Authentication check or generation and relay dry-run"
+        type: choice
+        options: [auth, generate]
+        default: auth
+  schedule:
+    - cron: "7 9 * * *"
+      timezone: "Asia/Shanghai"
+    - cron: "22 9 * * *"
+      timezone: "Asia/Shanghai"
+
+permissions:
+  contents: write
+  id-token: write
+  copilot-requests: write
+
+concurrency:
+  group: embodied-ai-daily-feishu
+  cancel-in-progress: false
+
+jobs:
+  cloud-daily:
+    # Schedule stays dormant until the Copilot entitlement, source quality and
+    # Vercel OIDC changes pass a manual no-send run.
+    if: github.event_name == 'workflow_dispatch' || vars.CLOUD_DAILY_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve date and existing send state
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          DATE="$(TZ=Asia/Shanghai date +%Y.%m.%d)"
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
+            if [ -f "queue/$DATE.txt" ] ||
+               { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
+               { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Queue, success or send attempt already exists for $DATE."
+            fi
+          fi
+
+      - name: Set up Node.js
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Copilot CLI
+        if: steps.gate.outputs.skip != 'true'
+        run: npm install --global @github/copilot
+
+      - name: Check Copilot authentication
+        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'auth'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ANSWER="$(copilot -p 'Reply with exactly READY and nothing else.' -s --no-ask-user)"
+          test "$ANSWER" = "READY"
+          echo "Copilot CLI authentication succeeded; no daily content generated."
+
+      - name: Generate and verify daily payload
+        if: steps.gate.outputs.skip != 'true' && (github.event_name == 'schedule' || inputs.mode == 'generate')
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DATE: ${{ steps.gate.outputs.date }}
+        run: |
+          set -euo pipefail
+          node scripts/cloud-daily.mjs prompt "$DATE" /tmp/cloud-daily-prompt.txt
+          copilot -p "$(cat /tmp/cloud-daily-prompt.txt)" -s --no-ask-user \
+            --allow-all-urls --deny-tool='shell' --deny-tool='write' \
+            > /tmp/cloud-daily-output.json
+          node scripts/cloud-daily.mjs build "$DATE" /tmp/cloud-daily-output.json
+          cp "queue/$DATE.txt" /tmp/cloud-daily-payload.txt
+          echo "Payload passed the source, date, count and format gates."
+
+      - name: Claim scheduled delivery before the external call
+        id: claim
+        if: github.event_name == 'schedule' && steps.gate.outputs.skip != 'true'
+        shell: bash
+        env:
+          DATE: ${{ steps.gate.outputs.date }}
+        run: |
+          set -euo pipefail
+          # Keep only the validated copy under /tmp while reloading latest main.
+          rm -f "queue/$DATE.txt"
+          git fetch origin main
+          git reset --hard origin/main
+          if [ -f "queue/$DATE.txt" ] ||
+             { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
+             { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
+            echo "claimed=false" >> "$GITHUB_OUTPUT"
+            echo "Another path claimed or sent $DATE."
+            exit 0
+          fi
+          jq -n --arg date "$DATE" --arg run_id "$GITHUB_RUN_ID" \
+            --arg payload_sha256 "$(sha256sum /tmp/cloud-daily-payload.txt | awk '{print $1}')" \
+            '{date:$date,run_id:$run_id,payload_sha256:$payload_sha256,status:"attempted"}' \
+            > state/last-attempt.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/last-attempt.json
+          git commit -m "Claim cloud daily delivery for $DATE"
+          git push origin HEAD:main
+          echo "claimed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Request GitHub OIDC token
+        if: steps.gate.outputs.skip != 'true' && (inputs.mode == 'generate' || steps.claim.outputs.claimed == 'true')
+        id: oidc
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const token = await core.getIDToken('feishu-embodied-ai-daily-relay');
+            core.setSecret(token);
+            core.setOutput('token', token);
+
+      - name: Validate relay in manual mode or send in scheduled mode
+        if: steps.gate.outputs.skip != 'true' && (inputs.mode == 'generate' || steps.claim.outputs.claimed == 'true')
+        shell: bash
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+          DATE: ${{ steps.gate.outputs.date }}
+        run: |
+          set -euo pipefail
+          URL="https://feishu-embodied-ai-daily.vercel.app/api/relay"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then URL="$URL?dry=1"; fi
+          jq -n --arg text "$(cat /tmp/cloud-daily-payload.txt)" --arg date "$DATE" \
+            '{text:$text,date:$date}' > /tmp/cloud-daily-request.json
+          HTTP_CODE="$(curl --silent --show-error --location --connect-timeout 15 \
+            --max-time 45 --request POST \
+            --header "Authorization: Bearer $OIDC_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data-binary @/tmp/cloud-daily-request.json \
+            --output /tmp/cloud-daily-response.json --write-out "%{http_code}" "$URL")"
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            jq '{ok,error}' /tmp/cloud-daily-response.json || true
+            exit 1
+          fi
+          test "$(jq -r '.ok // false' /tmp/cloud-daily-response.json)" = "true"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$(jq -r '.dry_run // false' /tmp/cloud-daily-response.json)" = "true"
+          else
+            test "$(jq -r '.sent // false' /tmp/cloud-daily-response.json)" = "true"
+          fi
+          jq '{ok,dry_run,sent,date,item_count,error}' /tmp/cloud-daily-response.json
+
+      - name: Record confirmed scheduled delivery
+        if: github.event_name == 'schedule' && steps.claim.outputs.claimed == 'true' && success()
+        shell: bash
+        env:
+          DATE: ${{ steps.gate.outputs.date }}
+        run: |
+          set -euo pipefail
+          cp /tmp/cloud-daily-payload.txt "queue/$DATE.txt"
+          jq -n --arg date "$DATE" \
+            --arg sent_at "$(TZ=Asia/Shanghai date --iso-8601=seconds)" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg source_commit "$GITHUB_SHA" \
+            --arg payload_sha256 "$(sha256sum /tmp/cloud-daily-payload.txt | awk '{print $1}')" \
+            --argjson item_count "$(grep -Ec '^[0-9]+\. ' /tmp/cloud-daily-payload.txt)" \
+            '{date:$date,sent_at:$sent_at,github_run_id:$run_id,source_commit:$source_commit,payload_sha256:$payload_sha256,item_count:$item_count,sent:true}' \
+            > state/last-success.json
+          git add "queue/$DATE.txt" state/last-success.json
+          git commit -m "Record cloud Feishu daily push for $DATE"
+          git pull --rebase origin main
+          git push origin HEAD:main

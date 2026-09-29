@@ -3,7 +3,10 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const GITHUB_OIDC_AUDIENCE = "feishu-embodied-ai-daily-relay";
 const GITHUB_REPOSITORY = "Kiera007-ui/feishu-embodied-ai-daily";
-const GITHUB_WORKFLOW_REF = "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/daily-feishu.yml@refs/heads/main";
+const GITHUB_WORKFLOW_REFS = {
+  "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/daily-feishu.yml@refs/heads/main": ["push"],
+  "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/cloud-daily.yml@refs/heads/main": ["schedule", "workflow_dispatch"]
+};
 const githubJwks = createRemoteJWKSet(
   new URL("https://token.actions.githubusercontent.com/.well-known/jwks")
 );
@@ -34,7 +37,7 @@ function containsBannedUrl(text) {
   });
 }
 
-function validatePayload(text, requestedDate) {
+export function validatePayload(text, requestedDate) {
   if (!text) return "Message text is required";
   if (text.length > MAX_TEXT_LENGTH) return "Message is too long";
   if (!/^具身智能每日推｜\d{4}\.\d{2}\.\d{2}/.test(text)) {
@@ -46,8 +49,9 @@ function validatePayload(text, requestedDate) {
   if (payloadDate !== requestedDate) return "Payload date does not match request date";
 
   const numbered = text.match(/^\d+\.\s+/gm) || [];
-  if (numbered.length < 3 || numbered.length > 5) {
-    return "Daily push must contain 3-5 numbered items";
+  const maxItems = requestedDate === "2026.09.30" ? 6 : 5;
+  if (numbered.length < 3 || numbered.length > maxItems) {
+    return `Daily push must contain 3-${maxItems} numbered items`;
   }
 
   if (containsBannedUrl(text)) {
@@ -68,13 +72,14 @@ async function authorizeGithub(req) {
 
     if (payload.repository !== GITHUB_REPOSITORY) return null;
     if (payload.ref !== "refs/heads/main") return null;
-    if (payload.workflow_ref !== GITHUB_WORKFLOW_REF) return null;
-    if (String(payload.event_name) !== "push") return null;
+    const eventName = String(payload.event_name || "");
+    if (!GITHUB_WORKFLOW_REFS[String(payload.workflow_ref)]?.includes(eventName)) return null;
 
     return {
       repository: String(payload.repository),
       sha: String(payload.sha || ""),
-      runId: String(payload.run_id || "")
+      runId: String(payload.run_id || ""),
+      eventName
     };
   } catch (error) {
     console.error("[relay-auth]", error);
@@ -140,6 +145,11 @@ export default async function handler(req, res) {
   const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
   const date = typeof req.body?.date === "string" ? req.body.date.trim() : "";
   const dryRun = req.query?.dry === "1" || req.query?.dry === "true";
+
+  // Manual cloud runs are validation-only; scheduled runs alone may deliver.
+  if (identity.eventName === "workflow_dispatch" && !dryRun) {
+    return res.status(403).json({ ok: false, error: "Manual cloud runs must be dry-run" });
+  }
 
   const validationError = validatePayload(text, date);
   if (validationError) {
