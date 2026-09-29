@@ -95,7 +95,8 @@ jobs:
           fi
           node scripts/cloud-daily.mjs prompt "$DATE" /tmp/cloud-daily-prompt.txt
           copilot -p "$(cat /tmp/cloud-daily-prompt.txt)" -s --no-ask-user \
-            --allow-all-urls --deny-tool='shell' --deny-tool='write' \
+            --available-tools='web_search,web_fetch' --allow-all-urls \
+            --deny-tool='shell' --deny-tool='write' \
             > /tmp/cloud-daily-output.json
           node scripts/cloud-daily.mjs build "$DATE" /tmp/cloud-daily-output.json
           cp "queue/$DATE.txt" /tmp/cloud-daily-payload.txt

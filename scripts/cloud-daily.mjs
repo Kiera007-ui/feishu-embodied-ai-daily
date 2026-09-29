@@ -95,6 +95,7 @@ export async function buildDaily(date, raw, { verifyLinks = true } = {}) {
       source: clean(candidate.source, "source", 2, 80),
       url: directUrl(candidate.url)
     };
+    if (/新浪|网易|sina|163\.com/i.test(item.source)) throw new Error("Banned final-source name");
     if (seenUrls.has(item.url)) throw new Error("Duplicate source URL");
     seenUrls.add(item.url);
     assertNotCarryover(item, date);
