@@ -54,6 +54,13 @@ export function validatePayload(text, requestedDate) {
     return `Daily push must contain 3-${maxItems} numbered items`;
   }
 
+  if (requestedDate >= "2026.09.30") {
+    const itemLines = text.split(/\r?\n/).filter(line => /^\d+\.\s+/.test(line));
+    if (itemLines.some(line => !/^\d+\.\s+【[\p{Script=Han}]{2,6}】\S/u.test(line))) {
+      return "Each numbered item must start with one Chinese topic tag";
+    }
+  }
+
   if (containsBannedUrl(text)) {
     return "Payload contains a banned final-link domain";
   }
