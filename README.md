@@ -18,7 +18,7 @@
 
 **默认关闭自动发送。** 只有仓库变量 `CLOUD_DAILY_ENABLED=true` 时，定时运行才进入生成和发送步骤。启用前按顺序完成：
 
-1. 在 Actions 手动运行 `Cloud embodied AI daily`，选 `auth`，确认个人仓库的 Copilot CLI 权益与鉴权。GitHub 文档对个人仓库使用内置 `GITHUB_TOKEN` 的说明不完全一致；若失败，需评估 Copilot 权益和受限的 fine-grained PAT。没有 OpenAI API Key 不等于无需任何模型权益。
+1. 在 Actions 手动运行 `Cloud embodied AI daily`，选 `auth`，确认个人仓库的 Copilot CLI 权益与鉴权。GitHub 文档对个人仓库使用内置 `GITHUB_TOKEN` 的说明不完全一致；若失败，可在仓库 Actions secrets 配置仅有 Copilot Requests 权限的 fine-grained PAT，secret 名称为 `COPILOT_GITHUB_TOKEN`，再重试。没有 OpenAI API Key 不等于无需任何模型权益。
 2. 手动选 `generate`，只进行源核查及 Vercel OIDC dry-run，不发送飞书；核对生成内容、真实正文、首次披露时间和候选覆盖质量。若材料不足、来源打不开或校验失败，工作流失败且不发送。
 3. 核对 Vercel 已部署支持 `cloud-daily.yml` 的 OIDC 允许条件，再启用仓库变量。定时运行先检查当天现有队列或发送记录；正式发送前写 `state/last-attempt.json`，不确定结果时不自动重试，避免重复。09:22 仅在此前尚未建立发送尝试时补跑。监测失败的 Actions 运行并人工复核。
 

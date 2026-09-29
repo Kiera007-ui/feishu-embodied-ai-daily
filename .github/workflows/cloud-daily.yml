@@ -69,8 +69,13 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          COPILOT_PAT: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          if [ -n "$COPILOT_PAT" ]; then
+            export COPILOT_GITHUB_TOKEN="$COPILOT_PAT"
+            unset COPILOT_PAT
+          fi
           ANSWER="$(copilot -p 'Reply with exactly READY and nothing else.' -s --no-ask-user)"
           test "$ANSWER" = "READY"
           echo "Copilot CLI authentication succeeded; no daily content generated."
@@ -80,9 +85,14 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          COPILOT_PAT: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           DATE: ${{ steps.gate.outputs.date }}
         run: |
           set -euo pipefail
+          if [ -n "$COPILOT_PAT" ]; then
+            export COPILOT_GITHUB_TOKEN="$COPILOT_PAT"
+            unset COPILOT_PAT
+          fi
           node scripts/cloud-daily.mjs prompt "$DATE" /tmp/cloud-daily-prompt.txt
           copilot -p "$(cat /tmp/cloud-daily-prompt.txt)" -s --no-ask-user \
             --allow-all-urls --deny-tool='shell' --deny-tool='write' \
