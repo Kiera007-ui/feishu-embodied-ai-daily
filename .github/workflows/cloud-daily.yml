@@ -17,7 +17,6 @@ on:
 permissions:
   contents: write
   id-token: write
-  copilot-requests: write
 
 concurrency:
   group: embodied-ai-daily-feishu
@@ -60,6 +59,16 @@ jobs:
         with:
           node-version: 22
 
+      - name: Require Copilot credential for personal repository
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
+            echo '::error::Add a fine-grained personal token with the Copilot Requests account permission as the COPILOT_GITHUB_TOKEN Actions secret.'
+            exit 1
+          fi
+
       - name: Install Copilot CLI
         if: steps.gate.outputs.skip != 'true'
         run: npm install --global @github/copilot
@@ -68,14 +77,9 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.mode == 'auth'
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          COPILOT_PAT: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -n "$COPILOT_PAT" ]; then
-            export COPILOT_GITHUB_TOKEN="$COPILOT_PAT"
-            unset COPILOT_PAT
-          fi
           ANSWER="$(copilot -p 'Reply with exactly READY and nothing else.' -s --no-ask-user)"
           test "$ANSWER" = "READY"
           echo "Copilot CLI authentication succeeded; no daily content generated."
@@ -84,15 +88,10 @@ jobs:
         if: steps.gate.outputs.skip != 'true' && (github.event_name == 'schedule' || inputs.mode == 'generate')
         shell: bash
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-          COPILOT_PAT: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           DATE: ${{ steps.gate.outputs.date }}
         run: |
           set -euo pipefail
-          if [ -n "$COPILOT_PAT" ]; then
-            export COPILOT_GITHUB_TOKEN="$COPILOT_PAT"
-            unset COPILOT_PAT
-          fi
           node scripts/cloud-daily.mjs prompt "$DATE" /tmp/cloud-daily-prompt.txt
           copilot -p "$(cat /tmp/cloud-daily-prompt.txt)" -s --no-ask-user \
             --available-tools='web_search,web_fetch' --allow-all-urls \
