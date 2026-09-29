@@ -32,6 +32,14 @@ function clean(value, label, min, max) {
   return text;
 }
 
+function topicTag(value) {
+  const tag = clean(value, "tag", 2, 6);
+  if (!/^[\p{Script=Han}]{2,6}$/u.test(tag)) {
+    throw new Error("tag must be a short Chinese topic");
+  }
+  return tag;
+}
+
 function directUrl(value) {
   const url = new URL(clean(value, "url", 12, 1200));
   if (url.protocol !== "https:" || url.username || url.password || !url.hostname.includes(".")) {
@@ -90,6 +98,7 @@ export async function buildDaily(date, raw, { verifyLinks = true } = {}) {
     if (seenKeys.has(eventKey)) throw new Error("Duplicate event_key");
     seenKeys.add(eventKey);
     const item = {
+      tag: topicTag(candidate.tag),
       title: clean(candidate.title, "title", 8, 80),
       summary: clean(candidate.summary, "summary", 100, 220),
       source: clean(candidate.source, "source", 2, 80),
@@ -111,11 +120,12 @@ export async function buildDaily(date, raw, { verifyLinks = true } = {}) {
     items.push(item);
   }
   if (items.length < 3 || items.length > max) throw new Error(`Expected 3-${max} qualified items`);
+  for (const item of items) topicTag(item.tag);
   const text = [
     `具身智能每日推｜${date}`,
     "",
     ...items.flatMap((item, index) => [
-      `${index + 1}. ${item.title}`,
+      `${index + 1}. 【${item.tag}】${item.title}`,
       item.summary,
       `来源：${item.source}`,
       item.url,

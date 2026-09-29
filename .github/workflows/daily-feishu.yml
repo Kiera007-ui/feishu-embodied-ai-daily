@@ -54,17 +54,17 @@ jobs:
             cat > /tmp/relay-fixture.txt <<EOF
           具身智能每日推｜$DATE
 
-          1. 自动链路验证条目一
+          1. 【测试】自动链路验证条目一
           仅用于验证GitHub OIDC与Vercel中继，不发送飞书。
           来源：验证
           https://example.com/validation-1
 
-          2. 自动链路验证条目二
+          2. 【测试】自动链路验证条目二
           仅用于验证Payload格式检查，不发送飞书。
           来源：验证
           https://example.com/validation-2
 
-          3. 自动链路验证条目三
+          3. 【测试】自动链路验证条目三
           仅用于验证防重复和禁用域名规则，不发送飞书。
           来源：验证
           https://example.com/validation-3
@@ -95,6 +95,14 @@ jobs:
           if [ "$ITEM_COUNT" -lt 3 ] || [ "$ITEM_COUNT" -gt "$MAX_ITEMS" ]; then
             echo "Expected 3-$MAX_ITEMS items, got $ITEM_COUNT"
             exit 1
+          fi
+
+          if [[ "$DATE" > "2026.09.29" ]]; then
+            TAGGED_COUNT="$(grep -Ec '^[0-9]+\. 【[^】]+】' "$QUEUE_FILE" || true)"
+            if [ "$TAGGED_COUNT" -ne "$ITEM_COUNT" ]; then
+              echo "Every item needs a topic tag before its title."
+              exit 1
+            fi
           fi
 
           if grep -Eiq 'https?://([^/]*\.)?(sina\.com|sina\.com\.cn|sina\.cn|163\.com)(/|$)' "$QUEUE_FILE"; then
