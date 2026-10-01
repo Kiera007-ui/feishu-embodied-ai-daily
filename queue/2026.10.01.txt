@@ -1,0 +1,11 @@
+具身智能每日推｜2026.10.01
+
+1. 【模型】Google发布Gemini 4 Argon，先向可信网络安全伙伴有限开放
+Google DeepMind于9月30日发布Gemini 4 Argon，定位长周期软件工程、企业知识工作与网络安全防御。模型单次输出上限提升至约100万Token，目前先通过Fairwind计划向可信网络安全伙伴开放，并参与美国政府的前沿模型预发布访问流程；更广泛的开发者、企业和消费者开放时间尚未公布。
+来源：Google DeepMind
+https://deepmind.google/
+
+2. 【场景】新加坡HTX启用人形机器人中心，面向公共安全训练具身AI
+新加坡内政科技局HTX于9月30日启用Home Team Humanoid Robotics Centre（H2RC），面向危化处置、爆炸现场调查、监狱违禁品搜查和救护物资补给等公共安全任务开发人形机器人。中心覆盖动作捕捉、遥操作、人类示范、仿真数据生成、VLA模型训练评测及多步任务Agent能力验证，并计划到2028年让首台人形机器人进入真实执法支持场景。
+来源：HTX
+https://www.htx.gov.sg/whats-happening/all-news---events/all-news/2026/media-release-htx-opens-humanoid-robotics-centre-to-advance-embodied-ai-for-public-safety
