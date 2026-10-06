@@ -1,0 +1,11 @@
+具身智能每日推｜2026.10.06
+
+1. 【安全】SafeWorld从隐身状态亮相，以仿真验证生成式AI机器人安全
+SafeWorld于10月5日正式从隐身状态亮相，团队由卡内基梅隆大学Safe AI Lab负责人Ding Zhao等创立，并完成1220万美元种子轮融资。其平台把机器人真实控制软件接入Genesis或MuJoCo等仿真环境，通过大量带有人类行为的场景测试碰撞、盲角、跌倒等风险，面向具身AI部署提供第三方安全评估与验证。
+来源：TechCrunch
+https://techcrunch.com/2026/10/05/can-safeworld-convince-people-that-gen-ai-robots-wont-hurt-them/
+
+2. 【融资】德国工业机器人公司RobCo估值升至10亿美元，双臂自学习机器人Alfie已有客户试用
+RobCo于10月5日披露，新一轮股份交易使公司估值达到10亿美元；本次交易据报道涉及约4000万美元股份，公司累计融资接近2亿美元。RobCo同时披露，面向传统自动化难覆盖工业任务的双臂自学习机器人Alfie计划于2027年3月推出，目前已有多家客户安装原型机；CEO已迁往美国推进其增长最快的市场。
+来源：Reuters
+https://www.reuters.com/legal/transactional/german-robot-startup-robco-hits-1-billion-valuation-ceo-moves-us-2026-10-05/
