@@ -1,0 +1,16 @@
+具身智能每日推｜2026.10.07
+
+1. 【模型】TwelveLabs发布Pegasus 1.6，用第一视角视频直接生成机器人训练数据
+10月6日，TwelveLabs发布Pegasus 1.6，新增第一视角/自我中心视频理解，可处理可穿戴相机、机器人机载相机及遥操作视频，并将连续操作拆成带时间戳的动作、实体和事件信息。官方同时加入原生图片分析、更强实体识别和长视频分段能力，面向机器人团队把人类操作视频转为可检索、可筛选、可标注的训练数据。
+来源：TwelveLabs
+https://www.twelvelabs.io/blog/what%E2%80%99s-new-pegasus-1.6
+
+2. 【客户】Human Friendly Robotics签下最高400万美元机器人铺砖合同
+10月6日，Human Friendly Robotics宣布与美国商业地板承包商Flooring Concepts of NJ签署三年期、最高400万美元的机器人铺砖合同，Tyler机器人将进入纽约、新泽西、宾夕法尼亚等项目，与现有安装工协同作业。合同覆盖该客户未来三年至少15%–40%的LVT铺装工作；HFR称Tyler此前已在纽约都会区和波多黎各数十个工地部署。
+来源：Human Friendly Robotics
+https://www.prnewswire.com/news-releases/human-friendly-robotics-signs-4-million-tiling-contract-with-flooring-concepts-of-nj-302900115.html
+
+3. 【场景】Minerva Humanoids走出隐身，半自主Roger启动高危作业付费试点
+10月6日，Minerva Humanoids走出隐身并披露约1000万美元Pre-Seed融资，同时开始推进首批付费试点。其Roger人形机器人采用“人类专家负责关键操作+机器人自主完成平衡、跌倒恢复和导航”的半自主架构，通过VR遥操作把专业人员与危险现场隔离，首批场景聚焦油气、高压设施、爆炸物处置和危化响应，计划今年晚些时候继续部署。
+来源：The AI Insider
+https://theaiinsider.tech/2026/10/06/minerva-humanoids-emerges-from-stealth-with-10m-in-funding-to-develop-robots-for-hazardous-work/
