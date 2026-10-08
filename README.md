@@ -1,111 +1,41 @@
 # 具身智能每日推 → 飞书
 
-## 当前生产架构
+## 当前架构
 
-**ChatGPT 每日任务（09:00 UTC+8） → GitHub 队列文件 → GitHub Actions → GitHub OIDC → Vercel `/api/relay` → 飞书群机器人**
+**Vercel Cron（北京时间 09:00–09:59） → GitHub Actions `cloud-daily.yml` → 程序采集候选 → OpenAI 模型选稿 → 代码逐条核验 → GitHub OIDC → Vercel `/api/relay` → 飞书群机器人**
 
-人工兜底仍保留：
+一次运行里完成全部步骤，不依赖 ChatGPT 后台写 GitHub，也不依赖 GitHub 自带定时器准时触发。
 
-**人工确认文本 → 首页转发页 → `/api/send` → 飞书群机器人**
+1. **触发**：Vercel Cron 每天 UTC 01:00 调用 `/api/cron`。Hobby 计划只保证在该小时内触发，所以实际在北京时间 09:00–09:59 之间。`/api/cron` 用 `GITHUB_DISPATCH_TOKEN` 向 GitHub 发送 `repository_dispatch`。GitHub 自带的 10:37 定时任务作为兜底，可能延迟数小时。
+2. **采集**（`scripts/collect.mjs`）：36氪/硬氪全量文章流和快讯（翻页接口）、量子位、AI前线/InfoQ、极客公园、投资界、甲子光年、TechCrunch Robotics、IEEE Spectrum Robotics，按主题词筛出窗口内候选，并附 36氪点赞收藏、甲子光年阅读数。机器之心、新智元、晚点、硅星人、你好太空没有可读列表，由模型定向搜索网页版。
+3. **选稿**（`scripts/generate.mjs` + `prompts/cloud-daily.md`）：OpenAI Responses API，默认模型 `gpt-6.1-sol`、推理强度 `high`，开启 `web_search` 并屏蔽新浪/网易。可用仓库变量 `OPENAI_MODEL`、`OPENAI_REASONING` 覆盖。
+4. **核验**（`scripts/cloud-daily.mjs`）：逐条打开链接，检查发布时间与首次披露时间都在窗口内、页面日期一致、事实摘录和第三方评述摘录都能在原文找到、标题不含“首发/独家”、不是新浪/网易或通稿平台、同一事件不重复。独立报道链接逐个打开，计入热度。不合格条目单独剔除并记录原因，其余照常发送。
+5. **发送与存档**：通过中继发送后，提交 `queue/日期.txt`、`reports/日期.md`（来源覆盖、热度、剔除原因、待跟进）和 `state/last-success.json`。
 
-自动发送不再依赖 TinyFish、浏览器点击、Vercel Cron、OpenAI API Key 或 Vercel AI Gateway。
+## 条数
 
-2026-09-29 核查发现 ChatGPT 后台任务写入 GitHub `queue` 时可能被安全检查拦截。任务触发成功不代表飞书已收到消息；检查 GitHub Actions 和 `state/last-success.json` 才能确认现有发送链路的结果。
+目标 3–6 条。少于 3 条时照常发送并在末尾注明“不足 3 条，未用旧闻补足”；没有合格内容时发送一句说明。中继和旧队列流程都接受 0–6 条，每条必须带一个中文主标签；深海、航天、低空等领域直接用领域作标签。
 
-## 云端生成候选流程（尚未启用）
+## 配置
 
-`.github/workflows/cloud-daily.yml` 提供电脑休眠时也可运行的独立路径：北京时间 09:07 和 09:22 在 GitHub 托管运行器启动，Copilot CLI 检索并读取文章正文，`scripts/cloud-daily.mjs` 检查文章及事件首次披露时间、来源链接、原文证据、去重和条数，再由同一次工作流用 GitHub OIDC 调用 Vercel 中继。它不依赖 ChatGPT 后台写 GitHub，也不依赖工作流内 `GITHUB_TOKEN` 提交文件再次触发 `push` 工作流。
+| 位置 | 名称 | 用途 |
+| --- | --- | --- |
+| GitHub Actions secret | `OPENAI_API_KEY` | 调用模型 |
+| Vercel env (Production) | `GITHUB_DISPATCH_TOKEN` | fine-grained PAT，仅本仓库，Contents 读写，用于触发工作流 |
+| Vercel env (Production) | `CRON_SECRET` | Vercel Cron 自动带上，防止他人调用 `/api/cron` |
+| Vercel env | `FEISHU_WEBHOOK_URL` | 已有，飞书机器人地址 |
+| 仓库文件 | `config/pipeline.json` | `cloud_daily_enabled` 为 true 时，定时触发才会真正发送 |
 
-**默认关闭自动发送。** 只有仓库变量 `CLOUD_DAILY_ENABLED=true` 时，定时运行才进入生成和发送步骤。启用前按顺序完成：
+## 手动运行
 
-1. 个人仓库必须先在 Actions secrets 配置 `COPILOT_GITHUB_TOKEN`：由仓库所有者创建仅有 Copilot Requests 账号权限的 fine-grained PAT，并在 GitHub 仓库设置页直接保存；不要把令牌发到聊天里。2026-09-29 的两次认证演练均显示内置 `GITHUB_TOKEN` 被 Copilot 拒绝。配置后手动运行 `Cloud embodied AI daily` 的 `auth` 模式，确认权益与鉴权。没有 OpenAI API Key 不等于无需模型权益或凭据。
-2. 手动选 `generate`，只进行源核查及 Vercel OIDC dry-run，不发送飞书；核对生成内容、真实正文、首次披露时间和候选覆盖质量。若材料不足、来源打不开或校验失败，工作流失败且不发送。
-3. 核对 Vercel 已部署支持 `cloud-daily.yml` 的 OIDC 允许条件，再启用仓库变量。定时运行先检查当天现有队列或发送记录；正式发送前写 `state/last-attempt.json`，不确定结果时不自动重试，避免重复。09:22 仅在此前尚未建立发送尝试时补跑。监测失败的 Actions 运行并人工复核。
-
-GitHub 定时工作流可能延迟或漏触发，因此 09:07/09:22 是尽力而为的时间，不保证精确到分钟。现有 `daily-feishu.yml` 仍处理 ChatGPT 或人工写入的队列；如果云端已建立当天发送尝试，它不会再次发送。
-
-仅 **2026.09.30** 允许最多 6 条：3 条已核实结转内容，加最多 3 条当日新事件；其他日期恢复 3–5 条。该例外同时在工作流和 Vercel 中继校验，过期后自动失效。
-
-从 **2026.09.30** 起，每条标题前须有一个按核心事实选择的主题标签，例如 `1. 【场景】智元灵犀X2进入爱仕达全国100家门店`。常用标签包括模型、融资、客户、场景、产品、技术、上市、政策、合作、量产、订单；标签只帮助浏览，不改变时效或质量排序。IPO及配发结果用「上市」而非笼统写成「融资」。云端生成器和 Vercel 中继均会校验标签，已有 9/29 队列不追改。
-
-## 自动流程
-
-1. ChatGPT 每日任务完成逐源检索、筛选、链接核验并冻结最终 Payload。
-2. 任务只创建一个文件：
-   `queue/YYYY.MM.DD.txt`
-3. 该 GitHub push 自动触发 `.github/workflows/daily-feishu.yml`。
-4. Workflow 先检查 `state/last-success.json`。当天已有成功记录时，立即停止，不调用发送接口。
-5. Workflow 校验：
-   - 首行日期与文件名一致；
-   - 通常只有 3–5 条，2026.09.30 一次性最多 6 条；
-   - 最终文本中不存在新浪/网易 URL。
-6. GitHub Actions 请求短期 OIDC token，不保存长期发送密钥。
-7. Workflow 携带 OIDC token 调用 Vercel `/api/relay`。
-8. Vercel 再次验证 GitHub 仓库、main 分支、指定 workflow、Payload 日期、条数格式和新浪/网易禁用域名。
-9. 只有通过全部校验后，Vercel 才 POST 已有的 `FEISHU_WEBHOOK_URL`。
-10. 只有 Vercel 明确返回 `sent:true` 后，GitHub Actions 才更新并提交 `state/last-success.json`。
+- **试跑不发送**：Actions → Cloud embodied AI daily → Run workflow，mode 选 `dry`；或修改并提交 `ops/dry-run.txt`。
+- **手动补发**：mode 选 `live`。当天已有发送或发送尝试记录时会自动跳过。
+- 每次运行的候选清单、模型输出、核验结果和推送文本都保存在该运行的 Artifacts 中，摘要页直接显示运行报告。
 
 ## 防重复
 
-有两层防重复：
-
-- **队列层**：ChatGPT 每日任务不得覆盖或重复创建同一天的 `queue/YYYY.MM.DD.txt`。
-- **发送层**：GitHub Actions 在发送前读取持久化的 `state/last-success.json`；同一天已确认成功则停止。
-
-此外 Workflow 使用 GitHub Actions `concurrency`，防止同一批任务并行发送。
-
-若 Vercel 请求超时、状态不确定或返回失败，Workflow 直接失败，不自动二次提交，避免不确定状态下重复发送。
+发送前先提交 `state/last-attempt.json` 占位，再调用中继；当天已有成功或尝试记录的运行一律跳过。中继结果不确定时不自动重试，避免重复发送。旧的 `daily-feishu.yml` 队列流程仍可用于人工兜底，同样读取这两个记录文件。
 
 ## 鉴权
 
-自动中继不使用固定公开 secret。
-
-GitHub Actions 具备：
-
-```yaml
-permissions:
-  contents: write
-  id-token: write
-```
-
-运行时向 GitHub 申请 audience 为：
-
-`feishu-embodied-ai-daily-relay`
-
-的短期 OIDC token。
-
-Vercel `/api/relay` 会验证：
-
-- issuer；
-- audience；
-- repository = `Kiera007-ui/feishu-embodied-ai-daily`；
-- ref = `refs/heads/main`；
-- workflow_ref = 指定的 `daily-feishu.yml`；
-- event_name = `push`。
-
-因此普通公网请求无法调用自动中继。
-
-## 当前已验证
-
-2026-09-28 已完成两项不产生重复飞书消息的验收：
-
-1. **OIDC 中继 dry-run**：GitHub Actions → Vercel `/api/relay?dry=1` 返回 HTTP 200、`ok:true`、`dry_run:true`。
-2. **同日防重复**：将已经成功发送过的 2026.09.28 Payload 写入队列后，Workflow 读取 `state/last-success.json`，在请求 OIDC / 调用 Vercel 中继之前停止。
-
-## 自动日推口径
-
-ChatGPT 每日任务维护完整编辑规则，核心包括：
-
-- 每天逐一核查：机器之心/机器之心Pro、新智元、量子位、AI前线/InfoQ、极客公园、36氪/硬氪、投资界、甲子光年、晚点、硅星人、你好太空；
-- 通常最终 3–5 条，宁少勿滥；2026.09.30 一次性最多 6 条；
-- 不收论文和纯学术论文解读；
-- 普通新品、一般融资、常规官宣、低讨论度 Demo 降权；
-- 模型、商业航天、物流、船舶/航运不要求每天覆盖；
-- 新浪、网易不得作为最终来源或链接；
-- 每条最终链接必须实际打开并与标题/正文对应。
-
-## 人工兜底
-
-首页和 `/api/send` 保留。
-
-自动队列异常时，可以人工确认一份冻结 Payload 后，通过首页发送。人工兜底与自动队列不得同时对同一天重复执行。
+`/api/relay` 只接受本仓库 main 分支指定工作流的 GitHub OIDC token。`cloud-daily.yml` 的定时、`repository_dispatch` 和手动运行可以真实发送，提交 `ops/dry-run.txt` 触发的运行只能试跑；`daily-feishu.yml` 只接受 push。
