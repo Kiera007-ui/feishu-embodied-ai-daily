@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import http from "node:http";
+import https from "node:https";
 import { targetWindow, shanghaiTime } from "./window.mjs";
 
 // OPENAI_BASE_URL lets the pipeline use an OpenAI-compatible gateway.
@@ -57,16 +59,43 @@ export async function buildPrompt(date, collected) {
     .replaceAll("{{CANDIDATES}}", JSON.stringify(candidates, null, 1));
 }
 
+// Node's fetch gives up when response headers take more than 5 minutes, and a
+// model run with web search can take longer. node:https has no such limit.
+function request(method, url, body, timeout) {
+  return new Promise(resolve => {
+    const target = new URL(url);
+    const data = body ? JSON.stringify(body) : undefined;
+    const req = (target.protocol === "http:" ? http : https).request(target, {
+      method,
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+        ...(data ? { "Content-Length": Buffer.byteLength(data) } : {})
+      }
+    }, res => {
+      const chunks = [];
+      res.on("data", chunk => chunks.push(chunk));
+      res.on("end", () => {
+        clearTimeout(timer);
+        const status = res.statusCode || 0;
+        resolve({ ok: status >= 200 && status < 300, status, text: Buffer.concat(chunks).toString("utf8") });
+      });
+      res.on("error", error => { clearTimeout(timer); resolve({ ok: false, status: 0, text: String(error) }); });
+    });
+    const timer = setTimeout(() => req.destroy(new Error(`no complete response within ${timeout / 1000}s`)), timeout);
+    req.on("error", error => { clearTimeout(timer); resolve({ ok: false, status: 0, text: String(error) }); });
+    req.setNoDelay(true);
+    req.setSocketKeepAlive?.(true, 60_000);
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
 async function call(method, url, body, { timeout = 120_000 } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     const started = Date.now();
-    const response = await fetch(url, {
-      method,
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(timeout)
-    }).catch(error => ({ ok: false, status: 0, text: async () => String(error) }));
-    const raw = await response.text();
+    const response = await request(method, url, body, timeout);
+    const raw = response.text;
     const seconds = Math.round((Date.now() - started) / 1000);
     console.log(`[model] ${method} attempt ${attempt}: HTTP ${response.status} after ${seconds}s`);
     if (response.ok) return JSON.parse(raw);
