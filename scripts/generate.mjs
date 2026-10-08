@@ -59,6 +59,7 @@ export async function buildPrompt(date, collected) {
 
 async function call(method, url, body, { timeout = 120_000 } = {}) {
   for (let attempt = 1; ; attempt += 1) {
+    const started = Date.now();
     const response = await fetch(url, {
       method,
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
@@ -66,13 +67,19 @@ async function call(method, url, body, { timeout = 120_000 } = {}) {
       signal: AbortSignal.timeout(timeout)
     }).catch(error => ({ ok: false, status: 0, text: async () => String(error) }));
     const raw = await response.text();
+    const seconds = Math.round((Date.now() - started) / 1000);
+    console.log(`[model] ${method} attempt ${attempt}: HTTP ${response.status} after ${seconds}s`);
     if (response.ok) return JSON.parse(raw);
-    const retryable = response.status === 0 || response.status === 429 || response.status >= 500;
+    // A request that ran for minutes before failing was real work; retrying it
+    // would push the job past its time limit, so only quick failures retry.
+    const quick = seconds < 300;
+    const retryable = quick && (response.status === 0 || response.status === 429 || response.status >= 500);
     if (!retryable || attempt >= 7) {
       const error = new Error(`OpenAI API ${method} failed: HTTP ${response.status} ${raw.slice(0, 600)}`);
       error.status = response.status;
       throw error;
     }
+    console.log(`[model] retrying: ${raw.slice(0, 200).replace(/\s+/g, " ")}`);
     // Gateways that pool accounts return 429 for short periods; back off longer.
     await new Promise(r => setTimeout(r, attempt * 30_000));
   }
