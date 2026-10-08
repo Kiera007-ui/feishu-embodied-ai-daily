@@ -174,7 +174,59 @@ export async function generate(date, collected) {
   }
   const searches = (response.output || []).filter(item => item.type === "web_search_call").length;
   const parsed = parseModelOutput(response);
+  await fixLengths(parsed, request.model);
   return { ...parsed, meta: { response_id: response.id, model: response.model, searches, usage: response.usage } };
+}
+
+const chars = value => [...String(value || "").trim()].length;
+export const LIMITS = { title: [8, 60], summary: [100, 220] };
+export const needsFix = item =>
+  Object.entries(LIMITS).some(([key, [min, max]]) => chars(item[key]) < min || chars(item[key]) > max);
+
+// The checker drops items whose title or summary is outside the length limits.
+// Rewriting only the wording is cheaper than losing an otherwise good item.
+export async function fixLengths(result, model) {
+  const targets = (result.items || []).map((item, index) => ({ index, item })).filter(({ item }) => needsFix(item));
+  if (!targets.length) return;
+  const input = [
+    "下面是日推条目的标题和摘要，长度不符合要求。逐条改写：",
+    "- title：8–50 个字符，陈述核心事实。",
+    "- summary：120–200 个字符（中文、英文字母、数字、标点和空格都按 1 个字符计）。",
+    "只压缩或调整措辞，保留原有事实、关键数字和来源中的第三方判断，不增加任何新信息。",
+    "只输出 JSON。",
+    JSON.stringify(targets.map(({ index, item }) => ({ index, title: item.title, summary: item.summary })), null, 1)
+  ].join("\n");
+  const schema = {
+    type: "object", additionalProperties: false, required: ["items"],
+    properties: { items: { type: "array", items: {
+      type: "object", additionalProperties: false, required: ["index", "title", "summary"],
+      properties: { index: { type: "integer" }, title: str, summary: str }
+    } } }
+  };
+  try {
+    const response = await call("POST", API, {
+      model, reasoning: { effort: "low" }, input,
+      text: { format: { type: "json_schema", name: "length_fix", strict: true, schema } }
+    }, { timeout: 5 * 60_000 });
+    const texts = (response.output || []).filter(item => item.type === "message")
+      .map(item => (item.content || []).filter(part => part.type === "output_text").map(part => part.text).join(""));
+    let fixed = null;
+    for (const text of [...texts, response.output_text].reverse()) {
+      const raw = String(text || "");
+      const start = raw.indexOf("{");
+      const end = raw.lastIndexOf("}");
+      try { fixed = JSON.parse(raw.slice(start, end + 1)); break; } catch {}
+    }
+    for (const entry of fixed?.items || []) {
+      const item = result.items[entry.index];
+      if (!item) continue;
+      const candidate = { ...item, title: entry.title, summary: entry.summary };
+      if (!needsFix(candidate)) Object.assign(item, { title: entry.title, summary: entry.summary });
+    }
+    console.log(`[model] length fix: ${targets.length} items needed it, ${targets.filter(({ item }) => !needsFix(item)).length} fixed`);
+  } catch (error) {
+    console.log(`[model] length fix failed: ${error.message.slice(0, 200)}`);
+  }
 }
 
 if (process.argv[1]?.endsWith("generate.mjs")) {
