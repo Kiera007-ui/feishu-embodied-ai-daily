@@ -43,5 +43,7 @@
 - watchlist：值得跟进但暂无合格报道的公司或产品，最多 5 条。
 - coverage：对“必须检索”的每个来源各写一行，status 为 found（有入选或候选）、checked_none（检索过但窗口内无合格内容）、unavailable（无法检索），note 写一句说明。
 
+最终回复只能是一个 JSON 对象本身，以 { 开头、以 } 结尾，前后不要加过程说明或代码块标记。
+
 CANDIDATES:
 {{CANDIDATES}}

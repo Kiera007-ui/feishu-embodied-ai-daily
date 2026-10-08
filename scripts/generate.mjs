@@ -85,14 +85,35 @@ async function call(method, url, body, { timeout = 120_000 } = {}) {
   }
 }
 
-function outputText(response) {
-  if (typeof response.output_text === "string" && response.output_text) return response.output_text;
-  return (response.output || [])
+function tryParse(text) {
+  const trimmed = String(text || "").trim().replace(/^```(?:json)?\s*|\s*```$/g, "");
+  const attempts = [trimmed];
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start > 0 && end > start) attempts.push(trimmed.slice(start, end + 1));
+  for (const attempt of attempts) {
+    try {
+      const value = JSON.parse(attempt);
+      if (value && Array.isArray(value.items) && Array.isArray(value.coverage)) return value;
+    } catch {}
+  }
+  return null;
+}
+
+// Some gateways return progress notes as separate messages before the JSON
+// (or join them into output_text), so look for the message that is the JSON.
+export function parseModelOutput(response) {
+  const messages = (response.output || [])
     .filter(item => item.type === "message")
-    .flatMap(item => item.content || [])
-    .filter(part => part.type === "output_text")
-    .map(part => part.text)
-    .join("");
+    .map(item => (item.content || []).filter(part => part.type === "output_text").map(part => part.text).join(""));
+  for (const text of [...messages].reverse()) {
+    const value = tryParse(text);
+    if (value) return value;
+  }
+  const value = tryParse(response.output_text) || tryParse(messages.join(""));
+  if (value) return value;
+  const preview = (messages.at(-1) || response.output_text || "").slice(0, 300);
+  throw new Error(`Model output has no valid daily JSON. Last message starts: ${preview}`);
 }
 
 export async function generate(date, collected) {
@@ -123,7 +144,7 @@ export async function generate(date, collected) {
     throw new Error(`OpenAI response ended as ${response.status}: ${JSON.stringify(response.error || response.incomplete_details)}`);
   }
   const searches = (response.output || []).filter(item => item.type === "web_search_call").length;
-  const parsed = JSON.parse(outputText(response));
+  const parsed = parseModelOutput(response);
   return { ...parsed, meta: { response_id: response.id, model: response.model, searches, usage: response.usage } };
 }
 
