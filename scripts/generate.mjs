@@ -68,12 +68,13 @@ async function call(method, url, body, { timeout = 120_000 } = {}) {
     const raw = await response.text();
     if (response.ok) return JSON.parse(raw);
     const retryable = response.status === 0 || response.status === 429 || response.status >= 500;
-    if (!retryable || attempt >= 4) {
+    if (!retryable || attempt >= 7) {
       const error = new Error(`OpenAI API ${method} failed: HTTP ${response.status} ${raw.slice(0, 600)}`);
       error.status = response.status;
       throw error;
     }
-    await new Promise(r => setTimeout(r, attempt * 15_000));
+    // Gateways that pool accounts return 429 for short periods; back off longer.
+    await new Promise(r => setTimeout(r, attempt * 30_000));
   }
 }
 
@@ -99,12 +100,10 @@ export async function generate(date, collected) {
     input
   };
   let response;
-  try {
+  if (process.env.OPENAI_BACKGROUND === "true") {
     response = await call("POST", API, { ...request, background: true, store: true });
-  } catch (error) {
-    // Some gateways do not support background mode; fall back to one long request.
-    if (error.status !== 400 && error.status !== 404 && error.status !== 422) throw error;
-    console.warn("Background mode was rejected; retrying as a single request.");
+  } else {
+    // One long request works with OpenAI and with compatible gateways.
     response = await call("POST", API, request, { timeout: 30 * 60_000 });
   }
   const deadline = Date.now() + 40 * 60_000;

@@ -101,6 +101,7 @@ jobs:
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           OPENAI_REASONING: ${{ vars.OPENAI_REASONING }}
+          OPENAI_BACKGROUND: ${{ vars.OPENAI_BACKGROUND }}
         run: node scripts/generate.mjs "$DATE" /tmp/daily/collected.json /tmp/daily/model.json
 
       - name: Check every item against the rules
