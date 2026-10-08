@@ -1,0 +1,6 @@
+具身智能每日推｜2026.10.08
+
+1. 【模型】Liquid AI开源Open d1决策模型，支持Jetson端侧单次前向推理
+10月7日，Liquid AI正式开放d1-3B和实验版d1-omni-600M两款决策模型权重。与逐Token生成答案的模型不同，Open d1可通过一次前向传播直接输出分类、选择或评分结果；d1-3B支持文本与图像输入，d1-omni-600M还支持文本与音频组合。官方测试显示，d1-3B在Jetson AGX Thor上单问题推理延迟为16毫秒，在Jetson AGX Orin上为26毫秒，并演示了在Isaac Sim中通过Jetson端侧模型进行导航决策的硬件在环应用。上述性能为官方测试结果。
+来源：Liquid AI官方技术博客
+https://www.liquid.ai/blog/d1-open
