@@ -1,18 +1,24 @@
 name: Cloud embodied AI daily
 
 on:
+  # Daily trigger from Vercel Cron (api/cron.js), 09:00-09:59 Beijing.
+  repository_dispatch:
+    types: [embodied-daily]
+  # Fallback if the Vercel trigger did not run. GitHub schedules can be hours late.
+  schedule:
+    - cron: "37 10 * * *"
+      timezone: "Asia/Shanghai"
   workflow_dispatch:
     inputs:
       mode:
-        description: "Authentication check or generation and relay dry-run"
+        description: "dry = generate and check only; live = send to Feishu"
         type: choice
-        options: [auth, generate]
-        default: auth
-  schedule:
-    - cron: "7 9 * * *"
-      timezone: "Asia/Shanghai"
-    - cron: "22 9 * * *"
-      timezone: "Asia/Shanghai"
+        options: [dry, live]
+        default: dry
+  # Committing ops/dry-run.txt starts a dry run without sending.
+  push:
+    branches: [main]
+    paths: ["ops/dry-run.txt"]
 
 permissions:
   contents: write
@@ -24,11 +30,8 @@ concurrency:
 
 jobs:
   cloud-daily:
-    # Schedule stays dormant until the Copilot entitlement, source quality and
-    # Vercel OIDC changes pass a manual no-send run.
-    if: github.event_name == 'workflow_dispatch' || vars.CLOUD_DAILY_ENABLED == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - name: Checkout latest main
         uses: actions/checkout@v5
@@ -36,22 +39,34 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Resolve date and existing send state
+      - name: Decide date, mode and whether to run
         id: gate
         shell: bash
+        env:
+          INPUT_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           DATE="$(TZ=Asia/Shanghai date +%Y.%m.%d)"
-          echo "date=$DATE" >> "$GITHUB_OUTPUT"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_EVENT_NAME" = "schedule" ]; then
-            if [ -f "queue/$DATE.txt" ] ||
-               { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
+          MODE=live
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then MODE=dry; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then MODE="${INPUT_MODE:-dry}"; fi
+          SKIP=false
+          if [ "$MODE" = "live" ]; then
+            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] &&
+               [ "$(jq -r '.cloud_daily_enabled // false' config/pipeline.json)" != "true" ]; then
+              SKIP=true
+              echo "Cloud daily is not enabled in config/pipeline.json."
+            fi
+            if { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
                { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "Queue, success or send attempt already exists for $DATE."
+              SKIP=true
+              echo "A send or send attempt already exists for $DATE."
             fi
           fi
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE mode=$MODE skip=$SKIP"
 
       - name: Set up Node.js
         if: steps.gate.outputs.skip != 'true'
@@ -59,71 +74,79 @@ jobs:
         with:
           node-version: 22
 
-      - name: Require Copilot credential for personal repository
+      - name: Require OpenAI API key
         if: steps.gate.outputs.skip != 'true'
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          if [ -z "$COPILOT_GITHUB_TOKEN" ]; then
-            echo '::error::Add a fine-grained personal token with the Copilot Requests account permission as the COPILOT_GITHUB_TOKEN Actions secret.'
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo '::error::Add the OPENAI_API_KEY repository secret.'
             exit 1
           fi
 
-      - name: Install Copilot CLI
+      - name: Collect candidates from media sources
         if: steps.gate.outputs.skip != 'true'
-        run: npm install --global @github/copilot
-
-      - name: Check Copilot authentication
-        if: github.event_name == 'workflow_dispatch' && inputs.mode == 'auth'
-        shell: bash
         env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          ANSWER="$(copilot -p 'Reply with exactly READY and nothing else.' -s --no-ask-user)"
-          test "$ANSWER" = "READY"
-          echo "Copilot CLI authentication succeeded; no daily content generated."
-
-      - name: Generate and verify daily payload
-        if: steps.gate.outputs.skip != 'true' && (github.event_name == 'schedule' || inputs.mode == 'generate')
-        shell: bash
-        env:
-          COPILOT_GITHUB_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
           DATE: ${{ steps.gate.outputs.date }}
         run: |
-          set -euo pipefail
-          node scripts/cloud-daily.mjs prompt "$DATE" /tmp/cloud-daily-prompt.txt
-          copilot -p "$(cat /tmp/cloud-daily-prompt.txt)" -s --no-ask-user \
-            --available-tools='web_search,web_fetch' --allow-all-urls \
-            --deny-tool='shell' --deny-tool='write' \
-            > /tmp/cloud-daily-output.json
-          node scripts/cloud-daily.mjs build "$DATE" /tmp/cloud-daily-output.json
-          cp "queue/$DATE.txt" /tmp/cloud-daily-payload.txt
-          echo "Payload passed the source, date, count and format gates."
+          mkdir -p /tmp/daily
+          node scripts/collect.mjs "$DATE" /tmp/daily/collected.json
+          jq -r '.coverage[] | "\(.source): \(.status) \(.found) listed, \(.relevant) relevant"' /tmp/daily/collected.json
 
-      - name: Claim scheduled delivery before the external call
+      - name: Select and write items with the model
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          DATE: ${{ steps.gate.outputs.date }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          OPENAI_REASONING: ${{ vars.OPENAI_REASONING }}
+        run: node scripts/generate.mjs "$DATE" /tmp/daily/collected.json /tmp/daily/model.json
+
+      - name: Check every item against the rules
+        if: steps.gate.outputs.skip != 'true'
+        env:
+          DATE: ${{ steps.gate.outputs.date }}
+        run: |
+          node scripts/cloud-daily.mjs build "$DATE" /tmp/daily/collected.json /tmp/daily/model.json /tmp/daily
+          {
+            cat /tmp/daily/report.md
+            echo
+            echo '## 推送文本'
+            echo
+            echo '```text'
+            cat /tmp/daily/payload.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep run files
+        if: always() && steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-${{ steps.gate.outputs.date }}-${{ github.run_id }}
+          path: /tmp/daily
+          if-no-files-found: ignore
+
+      - name: Claim today's delivery before sending
         id: claim
-        if: github.event_name == 'schedule' && steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.mode == 'live'
         shell: bash
         env:
           DATE: ${{ steps.gate.outputs.date }}
         run: |
           set -euo pipefail
-          # Keep only the validated copy under /tmp while reloading latest main.
-          rm -f "queue/$DATE.txt"
           git fetch origin main
           git reset --hard origin/main
-          if [ -f "queue/$DATE.txt" ] ||
-             { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
+          if { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
              { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
             echo "claimed=false" >> "$GITHUB_OUTPUT"
-            echo "Another path claimed or sent $DATE."
+            echo "Another run claimed or sent $DATE."
             exit 0
           fi
+          mkdir -p state
           jq -n --arg date "$DATE" --arg run_id "$GITHUB_RUN_ID" \
-            --arg payload_sha256 "$(sha256sum /tmp/cloud-daily-payload.txt | awk '{print $1}')" \
-            '{date:$date,run_id:$run_id,payload_sha256:$payload_sha256,status:"attempted"}' \
-            > state/last-attempt.json
+            --arg payload_sha256 "$(sha256sum /tmp/daily/payload.txt | awk '{print $1}')" \
+            '{date:$date,run_id:$run_id,payload_sha256:$payload_sha256,status:"attempted"}' > state/last-attempt.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add state/last-attempt.json
@@ -132,8 +155,8 @@ jobs:
           echo "claimed=true" >> "$GITHUB_OUTPUT"
 
       - name: Request GitHub OIDC token
-        if: steps.gate.outputs.skip != 'true' && (inputs.mode == 'generate' || steps.claim.outputs.claimed == 'true')
         id: oidc
+        if: steps.gate.outputs.skip != 'true' && (steps.gate.outputs.mode == 'dry' || steps.claim.outputs.claimed == 'true')
         uses: actions/github-script@v8
         with:
           script: |
@@ -141,53 +164,50 @@ jobs:
             core.setSecret(token);
             core.setOutput('token', token);
 
-      - name: Validate relay in manual mode or send in scheduled mode
-        if: steps.gate.outputs.skip != 'true' && (inputs.mode == 'generate' || steps.claim.outputs.claimed == 'true')
+      - name: Send through the relay (dry runs only validate)
+        if: steps.gate.outputs.skip != 'true' && (steps.gate.outputs.mode == 'dry' || steps.claim.outputs.claimed == 'true')
         shell: bash
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
           DATE: ${{ steps.gate.outputs.date }}
+          MODE: ${{ steps.gate.outputs.mode }}
         run: |
           set -euo pipefail
           URL="https://feishu-embodied-ai-daily.vercel.app/api/relay"
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then URL="$URL?dry=1"; fi
-          jq -n --arg text "$(cat /tmp/cloud-daily-payload.txt)" --arg date "$DATE" \
-            '{text:$text,date:$date}' > /tmp/cloud-daily-request.json
-          HTTP_CODE="$(curl --silent --show-error --location --connect-timeout 15 \
-            --max-time 45 --request POST \
-            --header "Authorization: Bearer $OIDC_TOKEN" \
-            --header "Content-Type: application/json" \
-            --data-binary @/tmp/cloud-daily-request.json \
-            --output /tmp/cloud-daily-response.json --write-out "%{http_code}" "$URL")"
-          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
-            jq '{ok,error}' /tmp/cloud-daily-response.json || true
-            exit 1
-          fi
-          test "$(jq -r '.ok // false' /tmp/cloud-daily-response.json)" = "true"
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            test "$(jq -r '.dry_run // false' /tmp/cloud-daily-response.json)" = "true"
+          if [ "$MODE" = "dry" ]; then URL="$URL?dry=1"; fi
+          jq -n --arg text "$(cat /tmp/daily/payload.txt)" --arg date "$DATE" '{text:$text,date:$date}' > /tmp/daily/request.json
+          HTTP_CODE="$(curl --silent --show-error --location --connect-timeout 15 --max-time 45 \
+            --request POST --header "Authorization: Bearer $OIDC_TOKEN" --header "Content-Type: application/json" \
+            --data-binary @/tmp/daily/request.json --output /tmp/daily/response.json --write-out "%{http_code}" "$URL")"
+          echo "HTTP $HTTP_CODE"
+          jq '{ok,dry_run,sent,date,item_count,error}' /tmp/daily/response.json || head -c 1000 /tmp/daily/response.json
+          test "$HTTP_CODE" -ge 200 && test "$HTTP_CODE" -lt 300
+          test "$(jq -r '.ok // false' /tmp/daily/response.json)" = "true"
+          if [ "$MODE" = "dry" ]; then
+            test "$(jq -r '.dry_run // false' /tmp/daily/response.json)" = "true"
           else
-            test "$(jq -r '.sent // false' /tmp/cloud-daily-response.json)" = "true"
+            test "$(jq -r '.sent // false' /tmp/daily/response.json)" = "true"
           fi
-          jq '{ok,dry_run,sent,date,item_count,error}' /tmp/cloud-daily-response.json
 
-      - name: Record confirmed scheduled delivery
-        if: github.event_name == 'schedule' && steps.claim.outputs.claimed == 'true' && success()
+      - name: Record confirmed delivery and report
+        if: steps.gate.outputs.mode == 'live' && steps.claim.outputs.claimed == 'true' && success()
         shell: bash
         env:
           DATE: ${{ steps.gate.outputs.date }}
         run: |
           set -euo pipefail
-          cp /tmp/cloud-daily-payload.txt "queue/$DATE.txt"
+          mkdir -p queue reports state
+          cp /tmp/daily/payload.txt "queue/$DATE.txt"
+          cp /tmp/daily/report.md "reports/$DATE.md"
           jq -n --arg date "$DATE" \
             --arg sent_at "$(TZ=Asia/Shanghai date --iso-8601=seconds)" \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg source_commit "$GITHUB_SHA" \
-            --arg payload_sha256 "$(sha256sum /tmp/cloud-daily-payload.txt | awk '{print $1}')" \
-            --argjson item_count "$(grep -Ec '^[0-9]+\. ' /tmp/cloud-daily-payload.txt)" \
+            --arg payload_sha256 "$(sha256sum /tmp/daily/payload.txt | awk '{print $1}')" \
+            --argjson item_count "$(grep -Ec '^[0-9]+\. ' /tmp/daily/payload.txt || true)" \
             '{date:$date,sent_at:$sent_at,github_run_id:$run_id,source_commit:$source_commit,payload_sha256:$payload_sha256,item_count:$item_count,sent:true}' \
             > state/last-success.json
-          git add "queue/$DATE.txt" state/last-success.json
+          git add "queue/$DATE.txt" "reports/$DATE.md" state/last-success.json
           git commit -m "Record cloud Feishu daily push for $DATE"
           git pull --rebase origin main
           git push origin HEAD:main

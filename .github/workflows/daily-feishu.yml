@@ -89,20 +89,20 @@ jobs:
           FIRST_LINE="$(head -n 1 "$QUEUE_FILE" | tr -d '\r')"
           test "$FIRST_LINE" = "具身智能每日推｜$DATE"
 
-          ITEM_COUNT="$(grep -Ec '^[0-9]+\. ' "$QUEUE_FILE")"
-          MAX_ITEMS=5
-          if [ "$DATE" = "2026.09.30" ]; then MAX_ITEMS=6; fi
-          if [ "$ITEM_COUNT" -lt 3 ] || [ "$ITEM_COUNT" -gt "$MAX_ITEMS" ]; then
-            echo "Expected 3-$MAX_ITEMS items, got $ITEM_COUNT"
+          ITEM_COUNT="$(grep -Ec '^[0-9]+\. ' "$QUEUE_FILE" || true)"
+          if [ "$ITEM_COUNT" -gt 6 ]; then
+            echo "Expected at most 6 items, got $ITEM_COUNT"
+            exit 1
+          fi
+          if [ "$ITEM_COUNT" -eq 0 ] && ! grep -q '没有达到筛选标准' "$QUEUE_FILE"; then
+            echo "An empty daily push must state that nothing met the criteria."
             exit 1
           fi
 
-          if [[ "$DATE" > "2026.09.29" ]]; then
-            TAGGED_COUNT="$(grep -Ec '^[0-9]+\. 【[^】]+】' "$QUEUE_FILE" || true)"
-            if [ "$TAGGED_COUNT" -ne "$ITEM_COUNT" ]; then
-              echo "Every item needs a topic tag before its title."
-              exit 1
-            fi
+          TAGGED_COUNT="$(grep -Ec '^[0-9]+\. 【[^】]+】' "$QUEUE_FILE" || true)"
+          if [ "$TAGGED_COUNT" -ne "$ITEM_COUNT" ]; then
+            echo "Every item needs a topic tag before its title."
+            exit 1
           fi
 
           if grep -Eiq 'https?://([^/]*\.)?(sina\.com|sina\.com\.cn|sina\.cn|163\.com)(/|$)' "$QUEUE_FILE"; then

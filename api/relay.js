@@ -3,15 +3,23 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const GITHUB_OIDC_AUDIENCE = "feishu-embodied-ai-daily-relay";
 const GITHUB_REPOSITORY = "Kiera007-ui/feishu-embodied-ai-daily";
+// events: allowed to call the relay; live: allowed to send for real.
 const GITHUB_WORKFLOW_REFS = {
-  "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/daily-feishu.yml@refs/heads/main": ["push"],
-  "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/cloud-daily.yml@refs/heads/main": ["schedule", "workflow_dispatch"]
+  "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/daily-feishu.yml@refs/heads/main": {
+    events: ["push"], live: ["push"]
+  },
+  "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/cloud-daily.yml@refs/heads/main": {
+    events: ["schedule", "workflow_dispatch", "repository_dispatch", "push"],
+    live: ["schedule", "workflow_dispatch", "repository_dispatch"]
+  }
 };
 const githubJwks = createRemoteJWKSet(
   new URL("https://token.actions.githubusercontent.com/.well-known/jwks")
 );
 
 const MAX_TEXT_LENGTH = 12000;
+const MAX_ITEMS = 6;
+const EMPTY_NOTICE = "没有达到筛选标准";
 const BANNED_HOSTS = ["sina.com", "sina.com.cn", "sina.cn", "163.com"];
 
 function singaporeDate() {
@@ -48,17 +56,13 @@ export function validatePayload(text, requestedDate) {
   const payloadDate = firstLine.replace("具身智能每日推｜", "").trim();
   if (payloadDate !== requestedDate) return "Payload date does not match request date";
 
-  const numbered = text.match(/^\d+\.\s+/gm) || [];
-  const maxItems = requestedDate === "2026.09.30" ? 6 : 5;
-  if (numbered.length < 3 || numbered.length > maxItems) {
-    return `Daily push must contain 3-${maxItems} numbered items`;
+  const itemLines = text.split(/\r?\n/).filter(line => /^\d+\.\s+/.test(line));
+  if (itemLines.length > MAX_ITEMS) return `Daily push must contain at most ${MAX_ITEMS} numbered items`;
+  if (itemLines.length === 0 && !text.includes(EMPTY_NOTICE)) {
+    return "An empty daily push must state that nothing met the criteria";
   }
-
-  if (requestedDate >= "2026.09.30") {
-    const itemLines = text.split(/\r?\n/).filter(line => /^\d+\.\s+/.test(line));
-    if (itemLines.some(line => !/^\d+\.\s+【[\p{Script=Han}]{2,6}】\S/u.test(line))) {
-      return "Each numbered item must start with one Chinese topic tag";
-    }
+  if (itemLines.some(line => !/^\d+\.\s+【[\p{Script=Han}]{2,6}】\S/u.test(line))) {
+    return "Each numbered item must start with one Chinese topic tag";
   }
 
   if (containsBannedUrl(text)) {
@@ -80,13 +84,15 @@ async function authorizeGithub(req) {
     if (payload.repository !== GITHUB_REPOSITORY) return null;
     if (payload.ref !== "refs/heads/main") return null;
     const eventName = String(payload.event_name || "");
-    if (!GITHUB_WORKFLOW_REFS[String(payload.workflow_ref)]?.includes(eventName)) return null;
+    const policy = GITHUB_WORKFLOW_REFS[String(payload.workflow_ref)];
+    if (!policy?.events.includes(eventName)) return null;
 
     return {
       repository: String(payload.repository),
       sha: String(payload.sha || ""),
       runId: String(payload.run_id || ""),
-      eventName
+      eventName,
+      mayGoLive: policy.live.includes(eventName)
     };
   } catch (error) {
     console.error("[relay-auth]", error);
@@ -153,9 +159,8 @@ export default async function handler(req, res) {
   const date = typeof req.body?.date === "string" ? req.body.date.trim() : "";
   const dryRun = req.query?.dry === "1" || req.query?.dry === "true";
 
-  // Manual cloud runs are validation-only; scheduled runs alone may deliver.
-  if (identity.eventName === "workflow_dispatch" && !dryRun) {
-    return res.status(403).json({ ok: false, error: "Manual cloud runs must be dry-run" });
+  if (!identity.mayGoLive && !dryRun) {
+    return res.status(403).json({ ok: false, error: `${identity.eventName} runs must be dry-run` });
   }
 
   const validationError = validatePayload(text, date);

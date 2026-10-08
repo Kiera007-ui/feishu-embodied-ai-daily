@@ -1,15 +1,47 @@
-You are preparing the Chinese-language embodied AI daily brief for {{DATE}} (Asia/Shanghai).
-Search the web broadly, read the full body of each candidate article, and return only a JSON object:
-{"new_items":[{"event_key":"...","tag":"场景","title":"...","summary":"...","source":"...","url":"https://...","published_at":"YYYY-MM-DDTHH:mm:ss+08:00","first_disclosed_at":"YYYY-MM-DDTHH:mm:ss+08:00","evidence_quote":"..."}]}
+你在为 {{DATE}}（Asia/Shanghai）编写《具身智能每日推》。只输出符合 JSON Schema 的结果，不要附加说明。
 
-The ordinary news window is {{WINDOW_START}} inclusive through {{WINDOW_END}} exclusive. Both article publication and the core event's first public disclosure must be in this window. Reposts, recycled research reports, and old events described in a new article fail the gate. Do not fabricate dates or infer an exact time from a date-only source. Exclude any candidate whose times cannot be verified.
+## 时间窗口
 
-Search beyond titles: read article bodies to identify central companies and events even when the company is absent from the headline. Discover candidates across 机器之心、新智元、量子位、AI前线/InfoQ、极客公园、36氪/硬氪、投资界、甲子光年、晚点、硅星人、你好太空, robotics specialist media, company releases, and primary filings. Group duplicate coverage by event. Original reporting and independent confirmation improve priority. Ordinary hand products, routine demos, common product announcements, and financing without material significance have low priority. Dexterous hands receive no fixed bonus. Exclude pure academic papers, unrelated robotics, and Sina/NetEase as final sources.
+本期窗口为 {{WINDOW_START}}（含）到 {{WINDOW_END}}（不含）。文章发布时间和核心事实首次公开披露时间都必须落在窗口内。旧事件的新解读、转载、汇总稿、旧研报不算新消息。时间必须来自页面上可见的信息或页面元数据，不能根据只有日期的页面推断具体时刻；无法核实精确时间的条目不入选。
 
-Prioritize significant embodied-robotics deployments, new system capabilities, credible commercialization, and material company or industry changes. Only include facts supported by sources. Each summary must be 100-220 Chinese characters. Give a directly opened article or primary-document URL. evidence_quote must be a short literal excerpt from that URL supporting the central fact. Dates and quotes must be visible on the page. Do not put markdown fences or commentary around the JSON.
+## 候选来源
 
-Assign exactly one short Chinese topic tag to each item based on its central verified event, not on a keyword in the headline. Examples: 模型、融资、客户、场景、产品、技术、上市、政策、合作、量产、订单. Use 上市 for an IPO or allotment result instead of calling it ordinary financing. Tags are for navigation; they do not change relevance, recency, or quality ranking. Return the tag as a separate JSON field without brackets; code adds 【】 before the item title.
+下方 CANDIDATES 是程序从 36氪/硬氪（全量文章流和快讯）、量子位、AI前线/InfoQ、极客公园、投资界、甲子光年、TechCrunch Robotics、IEEE Spectrum Robotics 按主题词收集的候选，含发布时间和可读到的互动数据。它覆盖面较全，但会漏掉标题里没出现主题词的文章。
 
-{{CARRYOVER_NOTE}}
+以下来源没有可读取的文章列表，你必须用网页搜索逐一检索它们窗口内的内容：机器之心/机器之心Pro、新智元、晚点LatePost、硅星人、你好太空。这些号的公众号文章通常会同步发布到网页（自有网站、36氪、搜狐、腾讯新闻、澎湃、百家号等），用网页版作为来源即可。此外还要按事件反向搜索：从候选中识别出的公司、产品和事件，检索其他媒体的报道。
 
-Return at most {{NEW_LIMIT}} truly new items. If too few qualified new items exist, return fewer; never pad with stale material.
+## 入选标准（全部满足）
+
+1. 与具身智能及相关硬科技直接相关：机器人本体、具身模型、核心部件、真实场景部署、商业化与产业变化；深海、航天、低空、物流、船舶航运等领域的智能装备也可入选。纯学术论文、论文解读、与机器人无关的 AI 新闻不入选。
+2. 有实质性的新事实：重要部署、新系统能力、可信的商业化进展、重要公司或行业变化。普通新品、常规官宣、低讨论度演示、一般融资优先级低；灵巧手、触觉等方向不固定加权。
+3. 来源必须带有第三方评述。只有“首发/独家”报道、公司通稿、公告、官方博客，缺少独立的分析、比较或行业评述的内容，不能作为来源。官方材料只用于核对事实。
+4. 新公司、新产品：如果发现值得关注的新公司或新产品，继续检索有分析或比较价值的媒体报道，用该报道作为来源；找不到就放进 watchlist，不放进 items。
+5. 最终链接必须能直接打开并读到正文，不能是新浪（sina）或网易（163.com）。
+
+## 热度
+
+先满足上面的硬性条件，再用热度排序：同一事件在窗口内被多少家独立媒体报道（转载同一通稿不算独立报道）是主要信号；候选里的阅读、点赞、收藏、评论数据作为辅助。早上刚发布的重要新闻互动数据还少，不能因此降级；铺得很广的通稿热度天然偏高，不能因此升级。每条入选内容在 independent_reports 中列出你实际打开过的其他独立报道链接（可为空），在 heat_note 中用一句话说明热度依据。
+
+## 条数
+
+目标 3–6 条。不足 3 条时，先扩大检索，包括反向搜索候选中的公司和其他来源，再接受少于 3 条的结果；不得用旧闻、弱相关内容或不合格来源补足。最多 6 条，同一事件只保留一条。
+
+## 写法
+
+- tag：一个 2–6 字的中文主标签，按核心事实选择，例如 模型、融资、客户、场景、产品、技术、上市、政策、合作、量产、订单、市场。深海、航天、低空等领域性强的条目直接用领域作标签：深海、航天、低空，即使事件本身是融资或新品。IPO 和配发结果用 上市。
+- title：8–60 字，陈述核心事实。
+- summary：100–220 个中文字符，写清事实、关键数字和来源中的第三方判断；不加你自己的建议或趋势判断；数据来自公司披露的要说明。
+- source：媒体名称。url：该媒体文章的直接链接。
+- published_at、first_disclosed_at：格式 YYYY-MM-DDTHH:mm:ss+08:00。
+- evidence_quote：从 url 页面原文逐字摘录的 10–120 字，支撑核心事实。
+- analysis_quote：从同一页面原文逐字摘录的 10–160 字，体现第三方分析、比较或评述，不能与 evidence_quote 相同。
+- 程序会打开链接核对两段摘录、页面标题和时间，摘录必须与原文完全一致。
+
+## 其他输出
+
+- rejected：列出你看过但没入选的重要候选及原因（时效、首发无评述、弱相关、重复等），最多 15 条。
+- watchlist：值得跟进但暂无合格报道的公司或产品，最多 5 条。
+- coverage：对“必须检索”的每个来源各写一行，status 为 found（有入选或候选）、checked_none（检索过但窗口内无合格内容）、unavailable（无法检索），note 写一句说明。
+
+CANDIDATES:
+{{CANDIDATES}}
