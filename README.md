@@ -21,6 +21,7 @@
 | 位置 | 名称 | 用途 |
 | --- | --- | --- |
 | GitHub Actions secret | `OPENAI_API_KEY` | 调用模型 |
+| GitHub Actions variable | `OPENAI_BASE_URL` | 模型接口地址，当前为 `https://cloud.dataeyes.ai/v1`；不设置时使用 OpenAI 官方接口 |
 | Vercel env (Production) | `GITHUB_DISPATCH_TOKEN` | fine-grained PAT，仅本仓库，Contents 读写，用于触发工作流 |
 | Vercel env (Production) | `CRON_SECRET` | Vercel Cron 自动带上，防止他人调用 `/api/cron` |
 | Vercel env | `FEISHU_WEBHOOK_URL` | 已有，飞书机器人地址 |

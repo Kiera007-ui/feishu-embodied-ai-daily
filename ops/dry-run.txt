@@ -4,3 +4,4 @@ dry run 2026-10-08 18:40 after fixing model output parsing
 dry run 2026-10-08 18:50 after relaxing first-disclosure timing
 dry run 2026-10-08 19:05 after replacing fetch with node:https
 dry run 2026-10-08 19:30 after adding title/summary length repair
+dry run 2026-10-08 19:45 after date-only rule; live sending enabled from the next scheduled run
