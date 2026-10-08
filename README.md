@@ -8,7 +8,7 @@
 
 1. **触发**：Vercel Cron 每天 UTC 01:00 调用 `/api/cron`。Hobby 计划只保证在该小时内触发，所以实际在北京时间 09:00–09:59 之间。`/api/cron` 用 `GITHUB_DISPATCH_TOKEN` 向 GitHub 发送 `repository_dispatch`。GitHub 自带的 10:37 定时任务作为兜底，可能延迟数小时。
 2. **采集**（`scripts/collect.mjs`）：36氪/硬氪全量文章流和快讯（翻页接口）、量子位、AI前线/InfoQ、极客公园、投资界、甲子光年、TechCrunch Robotics、IEEE Spectrum Robotics，按主题词筛出窗口内候选，并附 36氪点赞收藏、甲子光年阅读数。机器之心、新智元、晚点、硅星人、你好太空没有可读列表，由模型定向搜索网页版。
-3. **选稿**（`scripts/generate.mjs` + `prompts/cloud-daily.md`）：OpenAI Responses API，默认模型 `gpt-6.1-sol`、推理强度 `high`，开启 `web_search` 并屏蔽新浪/网易。可用仓库变量 `OPENAI_MODEL`、`OPENAI_REASONING` 覆盖。
+3. **选稿**（`scripts/generate.mjs` + `prompts/cloud-daily.md`）：OpenAI Responses API，默认模型 `gpt-6.1-sol`、推理强度 `high`，开启 `web_search` 并屏蔽新浪/网易。可用仓库变量 `OPENAI_MODEL`、`OPENAI_REASONING` 覆盖；使用兼容 OpenAI 的中转服务时，把仓库变量 `OPENAI_BASE_URL` 设为它的接口地址（形如 `https://example.com/v1`）。
 4. **核验**（`scripts/cloud-daily.mjs`）：逐条打开链接，检查发布时间与首次披露时间都在窗口内、页面日期一致、事实摘录和第三方评述摘录都能在原文找到、标题不含“首发/独家”、不是新浪/网易或通稿平台、同一事件不重复。独立报道链接逐个打开，计入热度。不合格条目单独剔除并记录原因，其余照常发送。
 5. **发送与存档**：通过中继发送后，提交 `queue/日期.txt`、`reports/日期.md`（来源覆盖、热度、剔除原因、待跟进）和 `state/last-success.json`。
 
