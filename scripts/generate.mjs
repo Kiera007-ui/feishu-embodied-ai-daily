@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import { targetWindow, shanghaiTime } from "./window.mjs";
 
-const API = "https://api.openai.com/v1/responses";
+// OPENAI_BASE_URL lets the pipeline use an OpenAI-compatible gateway.
+const API = `${(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "")}/responses`;
 const BANNED_SEARCH_DOMAINS = ["sina.com.cn", "sina.cn", "sina.com", "163.com"];
 
 const str = { type: "string" };
@@ -56,18 +57,22 @@ export async function buildPrompt(date, collected) {
     .replaceAll("{{CANDIDATES}}", JSON.stringify(candidates, null, 1));
 }
 
-async function call(method, url, body) {
+async function call(method, url, body, { timeout = 120_000 } = {}) {
   for (let attempt = 1; ; attempt += 1) {
     const response = await fetch(url, {
       method,
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}`, "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(120_000)
+      signal: AbortSignal.timeout(timeout)
     }).catch(error => ({ ok: false, status: 0, text: async () => String(error) }));
     const raw = await response.text();
     if (response.ok) return JSON.parse(raw);
     const retryable = response.status === 0 || response.status === 429 || response.status >= 500;
-    if (!retryable || attempt >= 4) throw new Error(`OpenAI API ${method} failed: HTTP ${response.status} ${raw.slice(0, 600)}`);
+    if (!retryable || attempt >= 4) {
+      const error = new Error(`OpenAI API ${method} failed: HTTP ${response.status} ${raw.slice(0, 600)}`);
+      error.status = response.status;
+      throw error;
+    }
     await new Promise(r => setTimeout(r, attempt * 15_000));
   }
 }
@@ -85,16 +90,23 @@ function outputText(response) {
 export async function generate(date, collected) {
   if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is not configured");
   const input = await buildPrompt(date, collected);
-  let response = await call("POST", API, {
+  const request = {
     model: process.env.OPENAI_MODEL || "gpt-6.1-sol",
     reasoning: { effort: process.env.OPENAI_REASONING || "high" },
-    background: true,
-    store: true,
     tools: [{ type: "web_search", filters: { blocked_domains: BANNED_SEARCH_DOMAINS } }],
     include: ["web_search_call.action.sources"],
     text: { format: { type: "json_schema", name: "embodied_daily", strict: true, schema: OUTPUT_SCHEMA } },
     input
-  });
+  };
+  let response;
+  try {
+    response = await call("POST", API, { ...request, background: true, store: true });
+  } catch (error) {
+    // Some gateways do not support background mode; fall back to one long request.
+    if (error.status !== 400 && error.status !== 404 && error.status !== 422) throw error;
+    console.warn("Background mode was rejected; retrying as a single request.");
+    response = await call("POST", API, request, { timeout: 30 * 60_000 });
+  }
   const deadline = Date.now() + 40 * 60_000;
   while (["queued", "in_progress"].includes(response.status)) {
     if (Date.now() > deadline) throw new Error("OpenAI response did not finish within 40 minutes");
