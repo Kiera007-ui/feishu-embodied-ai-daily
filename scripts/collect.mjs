@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { fetchText, postJson, decodeEntities } from "./http.mjs";
+import { fetchText, postJson, decodeEntities, plainText } from "./http.mjs";
 import { targetWindow, shanghaiTime } from "./window.mjs";
 
 // Topics the daily covers. Matching only narrows the candidate list; the
@@ -32,6 +32,7 @@ const RSS_SOURCES = [
 
 // Sources without a readable list page. The model searches them directly.
 export const SEARCH_ONLY_SOURCES = ["机器之心/机器之心Pro", "新智元", "晚点LatePost", "硅星人", "你好太空"];
+export const REQUIRED_SOURCES = ["36氪/硬氪", "量子位", "AI前线/InfoQ", "极客公园", "投资界", "甲子光年", ...SEARCH_ONLY_SOURCES];
 
 async function kr36Items(earliest) {
   const out = [];
@@ -51,6 +52,7 @@ async function kr36Items(earliest) {
         const flash = stream.label === "36氪快讯";
         out.push({
           source: stream.label, group: "36氪/硬氪", title: decodeEntities(m.widgetTitle),
+          summary: decodeEntities(m.summary || ""),
           url: `https://www.36kr.com/${flash ? "newsflashes" : "p"}/${m.itemId || entry.itemId}`,
           published_at: shanghaiTime(Number(m.publishTime))
         });
@@ -71,6 +73,7 @@ function rssItems(xml, name) {
       source: name,
       group: name,
       title: pick("title"),
+      summary: pick("description").replace(/<[^>]*>/g, " ").slice(0, 300),
       url: pick("link").replace(/^http:/, "https:").replace(/[?&]utm_[^&]+/g, ""),
       published_at: Number.isFinite(time) ? shanghaiTime(time) : null
     };
@@ -120,6 +123,18 @@ async function kr36Engagement(url) {
   return Object.values(value).some(Number.isFinite) ? value : undefined;
 }
 
+async function readCandidate(item) {
+  const page = await fetchText(item.url);
+  if (!page.ok) { item.read_status = "HTTP " + page.status; return; }
+  const body = plainText(page.body);
+  if (body.length < 200) { item.read_status = "正文过短"; return; }
+  // Supply the article body to the selector, and record any truncation.
+  item.article_text = body.slice(0, 8500);
+  item.article_text_truncated = body.length > 8500;
+  item.read_status = "readable";
+  item.engagement ??= await kr36Engagement(item.url);
+}
+
 export async function collect(date) {
   const { start, end } = targetWindow(date);
   // Keep a little history so the model can recognise reposts of older events.
@@ -157,12 +172,21 @@ export async function collect(date) {
     seen.add(item.url);
     const time = Date.parse(item.published_at || "");
     if (!Number.isFinite(time) || time < earliest || time >= end + 3 * 3600_000) continue;
-    if (!TOPIC.test(item.title)) continue;
+    // Article teasers may name the application while the headline only names a company.
+    if (!TOPIC.test(item.title + " " + (item.summary || ""))) continue;
     candidates.push({ ...item, in_window: time >= start && time < end });
   }
-  for (const item of candidates) item.engagement ??= await kr36Engagement(item.url);
+  const toRead = candidates.filter(item => item.in_window);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(6, toRead.length) }, async () => {
+    while (next < toRead.length) await readCandidate(toRead[next++]);
+  }));
   candidates.sort((a, b) => Date.parse(b.published_at) - Date.parse(a.published_at));
-  for (const row of coverage) row.relevant = candidates.filter(c => c.group === row.source && c.in_window).length;
+  for (const row of coverage) {
+    const matches = toRead.filter(c => c.group === row.source);
+    row.relevant = matches.length;
+    row.readable = matches.filter(c => c.read_status === "readable").length;
+  }
 
   return { date, window: { start: shanghaiTime(start), end: shanghaiTime(end) }, coverage, candidates };
 }

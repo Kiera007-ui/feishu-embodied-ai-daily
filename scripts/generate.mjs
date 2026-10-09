@@ -38,8 +38,9 @@ export const OUTPUT_SCHEMA = {
     coverage: {
       type: "array",
       items: {
-        type: "object", additionalProperties: false, required: ["source", "status", "note"],
-        properties: { source: str, status: { type: "string", enum: ["found", "checked_none", "unavailable"] }, note: str }
+        type: "object", additionalProperties: false, required: ["source", "status", "note", "queries", "checked_urls"],
+        properties: { source: str, status: { type: "string", enum: ["found", "checked_none", "unavailable"] }, note: str,
+          queries: { type: "array", items: str }, checked_urls: { type: "array", items: str } }
       }
     }
   }
@@ -49,8 +50,9 @@ export async function buildPrompt(date, collected) {
   const { start, end } = targetWindow(date);
   const template = await fs.readFile(new URL("../prompts/cloud-daily.md", import.meta.url), "utf8");
   const candidates = collected.candidates.map(c => ({
-    title: c.title, source: c.source, url: c.url, published_at: c.published_at,
-    in_window: c.in_window, engagement: c.engagement
+    title: c.title, summary: c.summary || "", source: c.source, url: c.url, published_at: c.published_at,
+    in_window: c.in_window, engagement: c.engagement, read_status: c.read_status || "not_read",
+    article_text: c.article_text || "", article_text_truncated: Boolean(c.article_text_truncated)
   }));
   return template
     .replaceAll("{{DATE}}", date)
@@ -175,9 +177,13 @@ export async function generate(date, collected) {
     throw new Error(`OpenAI response ended as ${response.status}: ${JSON.stringify(response.error || response.incomplete_details)}`);
   }
   const searches = (response.output || []).filter(item => item.type === "web_search_call").length;
+  // Keep the tool's actual queries. Model-written coverage is not evidence that a search ran.
+  const search_queries = (response.output || []).filter(item => item.type === "web_search_call")
+    .flatMap(item => item.action?.queries || (item.action?.query ? [item.action.query] : []))
+    .filter(query => typeof query === "string");
   const parsed = parseModelOutput(response);
   await fixLengths(parsed, request.model);
-  return { ...parsed, meta: { response_id: response.id, model: response.model, searches, usage: response.usage } };
+  return { ...parsed, meta: { response_id: response.id, model: response.model, searches, search_queries, usage: response.usage } };
 }
 
 const chars = value => [...String(value || "").trim()].length;

@@ -1,3 +1,4 @@
 {
-  "cloud_daily_enabled": false
+  "cloud_daily_enabled": true,
+  "hold_dates": ["2026.10.09"]
 }

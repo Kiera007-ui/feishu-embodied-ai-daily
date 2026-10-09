@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildDaily } from "./cloud-daily.mjs";
+import { REQUIRED_SOURCES } from "./collect.mjs";
 
 const DATE = "2026.10.09";
 const summary = "某具身机器人团队在真实仓储现场公布新的自主抓取流程，覆盖多种包装与摆放方式，并披露了连续运行的具体任务范围。报道描述了机器人如何感知、规划和完成操作，也列出目前仍需人工处理的例外情形。该进展体现从单项演示进入现场流程的变化，但尚无可独立核实的成本和故障率数据。";
@@ -59,4 +60,36 @@ test("independent reports count distinct reachable hosts only", async () => {
     independent_reports: ["https://example.com/same-host", "https://a.example.org/1", "https://a.example.org/2", "https://down.example.net/x"]
   })]), { fetchPage: pages({ "https://down.example.net/x": { ok: false, status: 404, body: "" } }) });
   assert.equal(result.kept[0].heat.independent_reports.length, 1);
+});
+
+test("source coverage requires actual searchable evidence", async () => {
+  const result = await buildDaily(DATE, model([]), { fetchPage: pages({}) });
+  assert.equal(result.coverage_issues.length, REQUIRED_SOURCES.length);
+  assert.match(result.coverage_issues[0], /36氪/);
+});
+
+test("written coverage claims do not replace recorded web searches", async () => {
+  const claims = REQUIRED_SOURCES.map(source => ({ source, status: "checked_none", note: "未找到合格内容",
+    queries: [source + " 机器人", source + " 航天"], checked_urls: [] }));
+  const result = await buildDaily(DATE, { ...model([]), coverage: claims, meta: { search_queries: [] } },
+    { fetchPage: pages({}) });
+  assert.equal(result.coverage_issues.length, REQUIRED_SOURCES.length);
+  assert.match(result.coverage_issues[0], /搜索工具记录/);
+});
+
+test("citation fragments are stripped from the outgoing summary", async () => {
+  const result = await buildDaily(DATE, model([item(1, {
+    summary: summary + " ([example.com](https://example.com/ref))"
+  })]), { fetchPage: pages({}) });
+  assert.equal(result.kept.length, 1);
+  assert.doesNotMatch(result.payload, /\[example.com\]|\(\[example.com/);
+});
+
+test("thin rehosting of first hand reporting is excluded", async () => {
+  const repost = page().replace("<body>", "<body><p>近日，硬氪消息称某公司完成融资。</p><p>综合硬氪等消息，这家公司与同行不同。</p>");
+  const result = await buildDaily(DATE, model([item(1)]), {
+    fetchPage: pages({ "https://example.com/story-1": { ok: true, status: 200, body: repost } })
+  });
+  assert.equal(result.kept.length, 0);
+  assert.match(result.dropped[0].reason, /转述首发/);
 });

@@ -52,10 +52,13 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then MODE="${INPUT_MODE:-dry}"; fi
           SKIP=false
           if [ "$MODE" = "live" ]; then
-            if [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] &&
-               [ "$(jq -r '.cloud_daily_enabled // false' config/pipeline.json)" != "true" ]; then
+            if [ "$(jq -r '.cloud_daily_enabled // false' config/pipeline.json)" != "true" ]; then
               SKIP=true
               echo "Cloud daily is not enabled in config/pipeline.json."
+            fi
+            if jq -e --arg date "$DATE" '(.hold_dates // []) | index($date) != null' config/pipeline.json > /dev/null; then
+              SKIP=true
+              echo "Cloud daily is held for $DATE pending review."
             fi
             if { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
                { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
@@ -110,6 +113,7 @@ jobs:
           DATE: ${{ steps.gate.outputs.date }}
         run: |
           node scripts/cloud-daily.mjs build "$DATE" /tmp/daily/collected.json /tmp/daily/model.json /tmp/daily
+          jq -e '.coverage_issues | length == 0' /tmp/daily/result.json
           {
             cat /tmp/daily/report.md
             echo
@@ -138,6 +142,12 @@ jobs:
           set -euo pipefail
           git fetch origin main
           git reset --hard origin/main
+          if [ "$(jq -r '.cloud_daily_enabled // false' config/pipeline.json)" != "true" ] ||
+             jq -e --arg date "$DATE" '(.hold_dates // []) | index($date) != null' config/pipeline.json > /dev/null; then
+            echo "claimed=false" >> "$GITHUB_OUTPUT"
+            echo "Live delivery is disabled or held for $DATE."
+            exit 0
+          fi
           if { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
              { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
             echo "claimed=false" >> "$GITHUB_OUTPUT"
