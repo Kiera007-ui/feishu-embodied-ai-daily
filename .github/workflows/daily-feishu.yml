@@ -4,7 +4,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "queue/*.txt"
+      # Manual sends only. Drafts written to queue/ by other tools never send;
+      # the cloud daily (cloud-daily.yml) is the one automatic sender.
+      - "manual/*.txt"
       - ".github/workflows/daily-feishu.yml"
 
 permissions:
@@ -33,7 +35,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          QUEUE_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA"             | grep -E '^queue/[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.txt$'             | head -n 1 || true)"
+          QUEUE_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA"             | grep -E '^manual/[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.txt$'             | head -n 1 || true)"
 
           if [ -n "$QUEUE_FILE" ]; then
             DATE="$(basename "$QUEUE_FILE" .txt)"
@@ -204,3 +206,4 @@ jobs:
           # Rebase any unrelated commits made while the relay was running.
           git pull --rebase origin main
           git push origin HEAD:main
+

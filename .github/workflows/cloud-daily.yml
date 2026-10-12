@@ -1,12 +1,13 @@
 name: Cloud embodied AI daily
 
 on:
-  # Daily trigger from Vercel Cron (api/cron.js), 09:00-09:59 Beijing.
+  # Vercel Cron (api/cron.js) dispatches this twice a day: once in the 08:00
+  # hour (main run, waits until 08:30) and once in the 10:00 hour (backup).
   repository_dispatch:
     types: [embodied-daily]
-  # Fallback if the Vercel trigger did not run. GitHub schedules can be hours late.
+  # Last fallback. GitHub schedules can start hours late.
   schedule:
-    - cron: "37 10 * * *"
+    - cron: "0 11 * * *"
       timezone: "Asia/Shanghai"
   workflow_dispatch:
     inputs:
@@ -15,6 +16,10 @@ on:
         type: choice
         options: [dry, live]
         default: dry
+      date:
+        description: "Issue date YYYY.MM.DD for dry replays (empty = today)"
+        required: false
+        default: ""
   # Committing ops/dry-run.txt starts a dry run without sending.
   push:
     branches: [main]
@@ -31,7 +36,7 @@ concurrency:
 jobs:
   cloud-daily:
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 110
     steps:
       - name: Checkout latest main
         uses: actions/checkout@v5
@@ -44,12 +49,22 @@ jobs:
         shell: bash
         env:
           INPUT_MODE: ${{ inputs.mode }}
+          INPUT_DATE: ${{ inputs.date }}
         run: |
           set -euo pipefail
-          DATE="$(TZ=Asia/Shanghai date +%Y.%m.%d)"
+          TODAY="$(TZ=Asia/Shanghai date +%Y.%m.%d)"
+          DATE="$TODAY"
           MODE=live
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then MODE=dry; fi
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then MODE="${INPUT_MODE:-dry}"; fi
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            MODE="${INPUT_MODE:-dry}"
+            if [ -n "${INPUT_DATE:-}" ]; then
+              if [ "$MODE" = "live" ] && [ "$INPUT_DATE" != "$TODAY" ]; then
+                echo "::error::Live runs can only send today's issue."; exit 1
+              fi
+              DATE="$INPUT_DATE"
+            fi
+          fi
           SKIP=false
           if [ "$MODE" = "live" ]; then
             if [ "$(jq -r '.cloud_daily_enabled // false' config/pipeline.json)" != "true" ]; then
@@ -70,6 +85,17 @@ jobs:
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
           echo "date=$DATE mode=$MODE skip=$SKIP"
+
+      - name: Wait until the 08:30 cutoff
+        if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.mode == 'live'
+        shell: bash
+        run: |
+          NOW="$(date +%s)"
+          CUTOFF="$(TZ=Asia/Shanghai date -d "$(TZ=Asia/Shanghai date +%F) 08:30" +%s)"
+          if [ "$NOW" -lt "$CUTOFF" ]; then
+            echo "Waiting $((CUTOFF - NOW)) seconds for 08:30 Beijing."
+            sleep $((CUTOFF - NOW))
+          fi
 
       - name: Set up Node.js
         if: steps.gate.outputs.skip != 'true'
@@ -96,16 +122,16 @@ jobs:
           node scripts/collect.mjs "$DATE" /tmp/daily/collected.json
           jq -r '.coverage[] | "\(.source): \(.status) \(.found) listed, \(.relevant) relevant"' /tmp/daily/collected.json
 
-      - name: Select and write items with the model
+      - name: Search, group, verify and rank with the model
         if: steps.gate.outputs.skip != 'true'
         env:
           DATE: ${{ steps.gate.outputs.date }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ vars.OPENAI_BASE_URL }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
-          OPENAI_REASONING: ${{ vars.OPENAI_REASONING }}
-          OPENAI_BACKGROUND: ${{ vars.OPENAI_BACKGROUND }}
-        run: node scripts/generate.mjs "$DATE" /tmp/daily/collected.json /tmp/daily/model.json
+          DAILY_MAX_EVENTS: ${{ vars.DAILY_MAX_EVENTS }}
+          DAILY_CONCURRENCY: ${{ vars.DAILY_CONCURRENCY }}
+        run: node scripts/select.mjs "$DATE" /tmp/daily/collected.json /tmp/daily/model.json
 
       - name: Check every item against the rules
         if: steps.gate.outputs.skip != 'true'
@@ -113,15 +139,14 @@ jobs:
           DATE: ${{ steps.gate.outputs.date }}
         run: |
           node scripts/cloud-daily.mjs build "$DATE" /tmp/daily/collected.json /tmp/daily/model.json /tmp/daily
-          jq -e '.coverage_issues | length == 0' /tmp/daily/result.json
           {
             cat /tmp/daily/report.md
             echo
             echo '## 推送文本'
             echo
-            echo '```text'
+            echo '~~~text'
             cat /tmp/daily/payload.txt
-            echo '```'
+            echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Keep run files
@@ -207,8 +232,8 @@ jobs:
           DATE: ${{ steps.gate.outputs.date }}
         run: |
           set -euo pipefail
-          mkdir -p queue reports state
-          cp /tmp/daily/payload.txt "queue/$DATE.txt"
+          mkdir -p sent reports state
+          cp /tmp/daily/payload.txt "sent/$DATE.txt"
           cp /tmp/daily/report.md "reports/$DATE.md"
           jq -n --arg date "$DATE" \
             --arg sent_at "$(TZ=Asia/Shanghai date --iso-8601=seconds)" \
@@ -218,7 +243,7 @@ jobs:
             --argjson item_count "$(grep -Ec '^[0-9]+\. ' /tmp/daily/payload.txt || true)" \
             '{date:$date,sent_at:$sent_at,github_run_id:$run_id,source_commit:$source_commit,payload_sha256:$payload_sha256,item_count:$item_count,sent:true}' \
             > state/last-success.json
-          git add "queue/$DATE.txt" "reports/$DATE.md" state/last-success.json
+          git add "sent/$DATE.txt" "reports/$DATE.md" state/last-success.json
           git commit -m "Record cloud Feishu daily push for $DATE"
           git pull --rebase origin main
           git push origin HEAD:main

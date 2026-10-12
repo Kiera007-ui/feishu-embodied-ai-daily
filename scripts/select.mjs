@@ -1,0 +1,308 @@
+import fs from "node:fs/promises";
+import { runModel } from "./llm.mjs";
+import { readPage, plainText } from "./http.mjs";
+import { targetWindow, shanghaiTime } from "./window.mjs";
+import { REQUIRED_SOURCES, SEARCH_SOURCES, OPTIONAL_SOURCES, readCandidate } from "./collect.mjs";
+import { loadHistory } from "./history.mjs";
+
+// The selection runs in stages so each judgement gets its own search budget:
+// sweep (find what the lists missed) -> triage (group into events and rank)
+// -> verify (one call per event) -> editor (final order). Code checks follow.
+const MAX_EVENTS = Number(process.env.DAILY_MAX_EVENTS || 12);
+const CONCURRENCY = Number(process.env.DAILY_CONCURRENCY || 4);
+const VERIFY_BUDGET_MS = Number(process.env.DAILY_VERIFY_MINUTES || 35) * 60_000;
+const BANNED = /(^|\.)(sina\.com|sina\.com\.cn|sina\.cn|163\.com)$/i;
+
+const str = { type: "string" };
+const obj = properties => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
+const arr = items => ({ type: "array", items });
+
+const CANDIDATE = obj({ title: str, url: str, source: str, published_at: str, note: str });
+const SWEEP_SCHEMA = obj({
+  candidates: arr(CANDIDATE),
+  searched: arr(obj({ source: str, queries: arr(str), result: str }))
+});
+const TRIAGE_SCHEMA = obj({
+  events: arr(obj({ event_key: str, headline: str, candidate_urls: arr(str), priority: { type: "integer" }, why: str })),
+  rejected: arr(obj({ title: str, url: str, reason: str }))
+});
+export const VERIFY_SCHEMA = obj({
+  decision: { type: "string", enum: ["include", "watch", "reject"] },
+  reason: str, event_key: str, tag: str, title: str, summary: str, source: str, url: str,
+  source_kind: { type: "string", enum: ["media", "company", "other"] },
+  published_at: str, first_disclosed_at: str, evidence_quote: str,
+  independent_reports: arr(str), heat_note: str
+});
+const EDITOR_SCHEMA = obj({ order: arr(obj({ event_key: str, keep: { type: "boolean" }, reason: str })) });
+
+async function context(date) {
+  const { start, end } = targetWindow(date);
+  const rules = (await fs.readFile(new URL("../prompts/rules.md", import.meta.url), "utf8"))
+    .replaceAll("{{WINDOW_START}}", shanghaiTime(start)).replaceAll("{{WINDOW_END}}", shanghaiTime(end));
+  const cases = await fs.readFile(new URL("../prompts/cases.md", import.meta.url), "utf8");
+  return { start, end, rules, cases };
+}
+
+const historyBlock = history => history.length
+  ? history.map(h => `- ${h.date} 【${h.tag}】${h.title}：${h.summary.slice(0, 120)} ${h.url}`).join("\n")
+  : "（无记录）";
+
+const brief = (c, chars) => ({
+  title: c.title, source: c.source, author: c.author || undefined, synced_on_36kr: c.synced_on_36kr || undefined,
+  url: c.url, published_at: c.published_at, time_precision: c.time_precision, engagement: c.engagement,
+  read_status: c.read_status || "not_read", text: (c.article_text || c.summary || "").slice(0, chars)
+});
+
+async function pool(items, limit, worker) {
+  const results = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) { const i = next++; results[i] = await worker(items[i], i); }
+  }));
+  return results;
+}
+
+async function sweep(date, collected, ctx) {
+  const listed = collected.coverage.map(r => `${r.source}：${r.status}，列表 ${r.found} 篇，窗口内相关 ${r.relevant ?? 0} 篇`).join("\n");
+  const known = collected.candidates.filter(c => c.in_window).map(c => `- ${c.title}（${c.source}）`).join("\n") || "（无）";
+  const weak = collected.coverage.filter(r => REQUIRED_SOURCES.includes(r.source) && (r.status === "unreachable" || !r.relevant)).map(r => r.source);
+  const sourcesTask = `你在为《具身智能每日推》补充候选文章。程序从各来源文章列表采集的情况如下：
+${listed}
+
+请用网页搜索补查以下来源在窗口内发表的文章：
+- ${[...new Set([...SEARCH_SOURCES, ...weak])].join("、")}：每家至少两次定向检索，例如“来源名 + 日期 + 机器人/具身”和“来源名 + 日期 + 深海/航天/低空”。
+- ${OPTIONAL_SOURCES.join("、")}：检索它们在新浪、网易以外的可读网页（媒体官网、36氪、投资界创投号、搜狐号等）。
+只返回窗口内发表、与规则范围相关、你实际打开过的文章；同一篇文章优先返回该媒体自己网站的链接。searched 逐一记录每个来源的实际检索词和结果。
+
+已采集的窗口内候选（不必重复返回）：
+${known}`;
+  const eventsTask = `你在为《具身智能每日推》补充候选文章。请用中英文网页搜索，广泛检索窗口内具身智能及相关硬科技的新消息，覆盖：人形机器人、具身模型、灵巧手与核心部件、机器人融资/订单/量产/部署/上市、仓储物流与无人配送、深海/航天/低空智能装备、重要政策。
+特别注意：
+- 标题和导语不点名“机器人”、但正文是机器人系统发布或部署的报道（例如在 IROS 等展会上同时发布本体、灵巧手、数据手套）。
+- 机器人公司自己发布的新品、融资、订单。返回时同时找专业媒体对同一事实的报道，优先返回媒体报道链接。
+- 境外专业媒体（Reuters、TechCrunch、IEEE Spectrum、The Robot Report 等）。
+只返回窗口内发表、你实际打开过的文章，最多 25 篇。searched 记录检索主题和结果。
+
+已采集的窗口内候选（不必重复返回）：
+${known}`;
+  const runs = await Promise.allSettled([
+    runModel({ name: "sweep_sources", input: `${ctx.rules}\n\n${sourcesTask}`, schema: SWEEP_SCHEMA, effort: "medium", search: true }),
+    runModel({ name: "sweep_events", input: `${ctx.rules}\n\n${eventsTask}`, schema: SWEEP_SCHEMA, effort: "medium", search: true })
+  ]);
+  const metas = [], searched = [], found = [];
+  for (const run of runs) {
+    if (run.status !== "fulfilled") { console.log(`[sweep] failed: ${String(run.reason?.message || run.reason).slice(0, 300)}`); continue; }
+    metas.push(run.value.meta);
+    searched.push(...(run.value.value.searched || []));
+    found.push(...(run.value.value.candidates || []));
+  }
+  // Read every new article ourselves; the model's claim that a page exists is not enough.
+  const seen = new Set(collected.candidates.map(c => c.url));
+  const added = [];
+  for (const c of found) {
+    let host;
+    try { host = new URL(c.url).hostname; } catch { continue; }
+    if (BANNED.test(host) || seen.has(c.url)) continue;
+    seen.add(c.url);
+    added.push({ title: c.title, url: c.url, source: c.source, group: c.source, published_at: c.published_at,
+      summary: c.note, origin: "search", in_window: true });
+  }
+  await pool(added, 6, readCandidate);
+  const readable = added.filter(c => c.read_status === "readable");
+  console.log(`[sweep] ${found.length} returned, ${added.length} new, ${readable.length} readable`);
+  return { metas, searched, added: readable, unreadable: added.filter(c => c.read_status !== "readable") };
+}
+
+async function triage(date, candidates, history, ctx) {
+  const input = `${ctx.rules}
+
+${ctx.cases}
+
+## 前 3 期已推送
+${historyBlock(history)}
+
+## 任务
+下面是窗口内全部候选（含正文节选）。请：
+1. 把报道同一事件的候选归为一组，用一个简短英文 event_key 标识；
+2. 剔除明显超出范围、核心事实为旧闻、与前 3 期重复的候选，写进 rejected 并说明原因；
+3. 对剩余事件按重要性和热度排序，选出最多 ${MAX_EVENTS} 个最值得逐个核查的事件，priority 用 1–5（5 最高）。
+宁可多留几个边缘事件交给下一步核查，也不要漏掉重要事件；目标是最终能有 3–6 条。公司自发内容也要保留为事件，下一步会去找媒体报道。
+candidate_urls 只能使用下列候选中的 url。
+
+## 候选
+${JSON.stringify(candidates.map(c => brief(c, 1500)), null, 1)}`;
+  return runModel({ name: "triage", input, schema: TRIAGE_SCHEMA, effort: "high", timeout: 15 * 60_000 });
+}
+
+async function verifyEvent(event, byUrl, history, ctx) {
+  const articles = event.candidate_urls.map(url => byUrl.get(url)).filter(Boolean).slice(0, 4).map(c => brief(c, 9000));
+  const input = `${ctx.rules}
+
+${ctx.cases}
+
+## 前 3 期已推送
+${historyBlock(history)}
+
+## 任务
+只核查下面这一个事件能否入选，并在能入选时写出条目。需要时联网检索：
+- 追溯核心事实的首次公开披露时间（检查正文提到的公告、采访、往日报道和公司页面）；
+- 如果现有候选是公司自发内容，找专业媒体对同一事实的报道作来源；
+- 如果现有候选是 36氪等平台同步的其他媒体文章，找该媒体自己网站上的同一篇文章，用它作链接；
+- 找其他独立媒体的报道，评估热度。
+decision：include（满足全部规则，写完整条目）；watch（值得跟进但暂无合格来源或时间无法确认）；reject（不符合规则）。reason 用一句话说明。
+不是 include 时，条目字段填空字符串、independent_reports 填空数组。source_kind：最终来源是专业媒体填 media，是公司自发材料填 company，其他填 other。
+evidence_quote 必须从 url 页面原文逐字摘录。
+
+## 事件
+${event.headline}（event_key: ${event.event_key}；初筛理由：${event.why}）
+
+## 候选文章
+${JSON.stringify(articles, null, 1)}`;
+  return runModel({ name: `verify_${event.event_key}`.slice(0, 60).replace(/[^\w-]/g, "_"), input, schema: VERIFY_SCHEMA, effort: "high", search: true, timeout: 20 * 60_000 });
+}
+
+async function editor(items, history, ctx) {
+  const input = `${ctx.rules}
+
+## 前 3 期已推送
+${historyBlock(history)}
+
+## 任务
+你是主编。下面是逐条核查后可以入选的条目。请：去掉同一事件的重复条目和与前 3 期重复的条目；按重要性和热度排序；keep=true 的最多 8 条（程序还会逐条硬校验，最终最多发 6 条）。不要改写条目内容。每条都要出现在 order 里，reason 一句话。
+
+## 条目
+${JSON.stringify(items.map(i => ({ event_key: i.event_key, tag: i.tag, title: i.title, summary: i.summary, source: i.source, url: i.url, published_at: i.published_at, heat_note: i.heat_note, independent_reports: i.independent_reports.length })), null, 1)}`;
+  return runModel({ name: "editor", input, schema: EDITOR_SCHEMA, effort: "high", timeout: 10 * 60_000 });
+}
+
+const chars = value => [...String(value || "").trim()].length;
+export const LIMITS = { title: [8, 50], summary: [120, 200] };
+export const needsFix = item => Object.entries(LIMITS).some(([k, [min, max]]) => chars(item[k]) < min || chars(item[k]) > max);
+
+// The checker drops items whose title or summary is outside the length limits.
+// Rewording is cheaper than losing an otherwise good item.
+async function fixLengths(items, metas) {
+  const targets = items.map((item, index) => ({ index, item })).filter(({ item }) => needsFix(item));
+  if (!targets.length) return items;
+  const schema = obj({ items: arr(obj({ index: { type: "integer" }, title: str, summary: str })) });
+  const input = ["下面是日推条目的标题和摘要，长度不符合要求。逐条改写：",
+    "- title：8–50 个字符，陈述核心事实。",
+    "- summary：120–200 个字符（中文、英文字母、数字、标点和空格都按 1 个字符计）。",
+    "只压缩或调整措辞，保留原有事实和关键数字，不增加任何新信息。只输出 JSON。",
+    JSON.stringify(targets.map(({ index, item }) => ({ index, title: item.title, summary: item.summary })), null, 1)].join("\n");
+  try {
+    const r = await runModel({ name: "length_fix", input, schema, effort: "low", timeout: 5 * 60_000 });
+    metas.push(r.meta);
+    for (const entry of r.value.items) {
+      const item = items[entry.index];
+      if (item && !needsFix({ ...item, ...entry })) Object.assign(item, { title: entry.title, summary: entry.summary });
+    }
+  } catch (error) {
+    console.log(`[length_fix] failed: ${String(error.message).slice(0, 200)}`);
+  }
+  return items;
+}
+
+export function coverageRows(collected, searched) {
+  return [...REQUIRED_SOURCES, ...OPTIONAL_SOURCES].map(source => {
+    const row = collected.coverage.find(r => r.source === source) || {};
+    const key = source.split("/")[0].replace("LatePost", "");
+    const hits = searched.filter(s => s.source.includes(key) || source.includes(s.source));
+    const queries = hits.flatMap(h => h.queries);
+    let status = "checked_none";
+    if (row.relevant > 0) status = "found";
+    else if (row.status === "unreachable" && !queries.length) status = "unavailable";
+    return { source, status, list_status: row.status || "none", listed: row.found ?? 0, relevant: row.relevant ?? 0,
+      queries, note: [row.note, ...hits.map(h => h.result)].filter(Boolean).join("；").slice(0, 300) };
+  });
+}
+
+export async function select(date, collected, { root = process.cwd() } = {}) {
+  const ctx = await context(date);
+  const history = await loadHistory(date, { root });
+  const metas = [];
+
+  const swept = await sweep(date, collected, ctx);
+  metas.push(...swept.metas);
+  const candidates = [...collected.candidates.filter(c => c.in_window), ...swept.added];
+  const byUrl = new Map(candidates.map(c => [c.url, c]));
+  console.log(`[select] ${candidates.length} candidates in window, ${history.length} history items`);
+
+  const rejected = [];
+  const watchlist = [];
+  let events = [];
+  if (candidates.length) {
+    const t = await triage(date, candidates, history, ctx);
+    metas.push(t.meta);
+    rejected.push(...(t.value.rejected || []));
+    events = (t.value.events || [])
+      .map(e => ({ ...e, candidate_urls: e.candidate_urls.filter(url => byUrl.has(url)) }))
+      .filter(e => e.candidate_urls.length)
+      .sort((a, b) => b.priority - a.priority)
+      .slice(0, MAX_EVENTS);
+  }
+  console.log(`[select] ${events.length} events to verify`);
+
+  const started = Date.now();
+  const verified = await pool(events, CONCURRENCY, async event => {
+    if (Date.now() - started > VERIFY_BUDGET_MS) return { event, error: "核查时间用尽，未核查" };
+    try { return { event, ...(await verifyEvent(event, byUrl, history, ctx)) }; }
+    catch (error) { return { event, error: String(error.message || error).slice(0, 300) }; }
+  });
+  const included = [];
+  for (const v of verified) {
+    const title = v.event.headline;
+    const url = v.event.candidate_urls[0];
+    if (v.error) { rejected.push({ title, url, reason: `核查失败：${v.error}` }); continue; }
+    metas.push(v.meta);
+    const r = v.value;
+    if (r.decision === "include" && r.source_kind === "company") {
+      watchlist.push({ name: title, reason: "只有公司自发材料，未找到专业媒体报道", url: r.url || url });
+    } else if (r.decision === "include") {
+      included.push({ ...r, event_key: r.event_key || v.event.event_key, priority: v.event.priority });
+    } else if (r.decision === "watch") {
+      watchlist.push({ name: title, reason: r.reason, url });
+    } else {
+      rejected.push({ title, url, reason: r.reason });
+    }
+  }
+
+  let items = included;
+  if (included.length > 1) {
+    try {
+      const e = await editor(included, history, ctx);
+      metas.push(e.meta);
+      const rank = new Map(e.value.order.map((o, i) => [o.event_key, { i, ...o }]));
+      for (const item of included) {
+        const o = rank.get(item.event_key);
+        if (o && !o.keep) rejected.push({ title: item.title, url: item.url, reason: `主编未选：${o.reason}` });
+      }
+      items = included.filter(i => rank.get(i.event_key)?.keep !== false)
+        .sort((a, b) => (rank.get(a.event_key)?.i ?? 99) - (rank.get(b.event_key)?.i ?? 99));
+    } catch (error) {
+      console.log(`[editor] failed, keeping triage order: ${String(error.message).slice(0, 200)}`);
+      items = included.sort((a, b) => b.priority - a.priority);
+    }
+  }
+
+  const queries = metas.flatMap(m => m.queries || []);
+  return {
+    items: await fixLengths(items.slice(0, 8), metas),
+    rejected: rejected.slice(0, 30),
+    watchlist: watchlist.slice(0, 8),
+    coverage: coverageRows(collected, swept.searched),
+    meta: {
+      model: metas[0]?.model, searches: queries.length, search_queries: queries,
+      stages: metas.map(m => ({ stage: m.stage, seconds: m.seconds, searches: m.searches, response_id: m.response_id })),
+      swept_added: swept.added.length, events: events.length, verified_included: included.length, history: history.length
+    }
+  };
+}
+
+if (process.argv[1]?.endsWith("select.mjs")) {
+  const [date, input, output] = process.argv.slice(2);
+  fs.readFile(input, "utf8")
+    .then(raw => select(date, JSON.parse(raw)))
+    .then(result => fs.writeFile(output, JSON.stringify(result, null, 2)))
+    .catch(error => { console.error(error); process.exitCode = 1; });
+}

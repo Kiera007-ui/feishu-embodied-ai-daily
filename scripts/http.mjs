@@ -49,6 +49,40 @@ export function pageTitle(html) {
   return [og?.[1], title?.[1]].filter(Boolean).map(x => decodeEntities(x).trim()).join(" | ");
 }
 
+// Some media pages only render their article text with JavaScript. For those,
+// read the same article from the site's own data endpoint so quotes and dates
+// can still be checked against the publisher's text.
+const JIQIZHIXIN_ARTICLE = /^https?:\/\/(?:www\.)?jiqizhixin\.com\/articles\/([\w-]+)/i;
+
+export async function readPage(url) {
+  const jqzx = JIQIZHIXIN_ARTICLE.exec(String(url));
+  if (jqzx) {
+    const api = await fetchText(`https://www.jiqizhixin.com/api/article_library/articles/${jqzx[1]}.json`);
+    if (!api.ok) return { ok: false, status: api.status, body: "", url };
+    try {
+      const a = JSON.parse(api.body);
+      const body = `<html><head><title>${a.title || ""}</title></head><body><p>${a.published_at || ""}</p>${a.content || a.description || ""}</body></html>`;
+      return { ok: Boolean(a.title), status: 200, body, url };
+    } catch {
+      return { ok: false, status: 0, body: "", url };
+    }
+  }
+  return fetchText(url);
+}
+
+export function postForm(url, form, { timeout = 25 } = {}) {
+  return new Promise(resolve => {
+    execFile(
+      "curl",
+      ["-s", "-m", String(timeout), "-X", "POST", "-A", UA, url, "--data", new URLSearchParams(form).toString()],
+      { maxBuffer: 20 * 1024 * 1024, encoding: "utf8" },
+      (_error, stdout) => {
+        try { resolve(JSON.parse(String(stdout))); } catch { resolve(null); }
+      }
+    );
+  });
+}
+
 export function postJson(url, body, { timeout = 25 } = {}) {
   return new Promise(resolve => {
     execFile(
