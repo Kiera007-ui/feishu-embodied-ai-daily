@@ -48,10 +48,12 @@ export async function call(method, url, body, { timeout = 120_000, label = "mode
     if (response.ok) return JSON.parse(raw);
     // A request that ran for minutes before failing was real work; retrying it
     // would push the job past its time limit, so only quick failures retry.
-    const quick = seconds < 300;
     // Gateways report a failed upstream account as HTTP 400 bad_response_status_code.
     const upstream = response.status === 400 && /bad_response_status_code|upstream/i.test(raw);
-    const retryable = quick && (response.status === 0 || response.status === 429 || response.status >= 500 || upstream);
+    const quick = seconds < 300;
+    const transient = response.status === 0 || response.status === 429 || response.status >= 500 || upstream;
+    // A slow upstream failure is retried once; quick ones up to maxAttempts.
+    const retryable = transient && (quick || attempt === 1);
     if (!retryable || attempt >= maxAttempts) {
       const error = new Error(`OpenAI API ${method} failed: HTTP ${response.status} ${raw.slice(0, 600)}`);
       error.status = response.status;

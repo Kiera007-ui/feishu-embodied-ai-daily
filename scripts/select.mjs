@@ -122,11 +122,11 @@ ${ctx.cases}
 ${historyBlock(history)}
 
 ## 任务
-下面是窗口内全部候选（含正文节选）。请：
+下面是窗口内全部候选（含正文节选）。程序已确认这些文章的发布时间都在窗口内，不要再以发布时间为由剔除；只有正文明确显示核心事实在窗口开始前已经公开时，才按旧闻剔除。请：
 1. 把报道同一事件的候选归为一组，用一个简短英文 event_key 标识；
 2. 剔除明显超出范围、核心事实为旧闻、与前 3 期重复的候选，写进 rejected 并说明原因；
 3. 对剩余事件按重要性和热度排序，选出最多 ${MAX_EVENTS} 个最值得逐个核查的事件，priority 用 1–5（5 最高）。
-宁可多留几个边缘事件交给下一步核查，也不要漏掉重要事件；目标是最终能有 3–6 条。公司自发内容也要保留为事件，下一步会去找媒体报道。
+宁可多留几个边缘事件交给下一步核查，也不要漏掉重要事件；目标是最终能有 3–6 条。候选足够时至少保留 8 个事件。公司自发内容也要保留为事件，下一步会去找媒体报道。
 candidate_urls 只能使用下列候选中的 url。
 
 ## 候选
@@ -207,7 +207,7 @@ export function coverageRows(collected, searched) {
   return [...REQUIRED_SOURCES, ...OPTIONAL_SOURCES].map(source => {
     const row = collected.coverage.find(r => r.source === source) || {};
     const key = source.split("/")[0].replace("LatePost", "");
-    const hits = searched.filter(s => s.source.includes(key) || source.includes(s.source));
+    const hits = searched.filter(s => s.source && (s.source.includes(key) || source.includes(s.source)));
     const queries = hits.flatMap(h => h.queries);
     let status = "checked_none";
     if (row.relevant > 0) status = "found";

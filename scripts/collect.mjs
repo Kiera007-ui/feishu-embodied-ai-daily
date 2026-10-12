@@ -180,7 +180,7 @@ async function latepostItems(earliest) {
   for (let page = 1; page <= 2; page += 1) {
     const res = await postForm("https://www.latepost.com/news/get-news-data", { page, limit: 20 });
     const list = Array.isArray(res?.data) ? res.data : [];
-    if (!list.length) { if (page === 1) throw new Error("文章列表为空"); break; }
+    if (!list.length) { if (page === 1) throw new Error("文章列表为空（晚点官网可能拒绝境外服务器访问）"); break; }
     for (const a of list) {
       if (!a.detail_url || !a.title) continue;
       out.push({
