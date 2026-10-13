@@ -14,9 +14,12 @@ export const TOPIC = new RegExp([
   "drone", "rocket", "satellite", "spacecraft", "underwater", "subsea", "autonomous"
 ].join("|"), "i");
 
-// Every approved channel must be checked, including channels without a feed.
+// Media the daily must cover. All of them except 新智元 have a readable article
+// list; 新智元 is read from its 36Kr account and searched by the model.
 export const REQUIRED_SOURCES = ALLOWED_SOURCE_NAMES;
 export const SEARCH_SOURCES = ["新智元", "硅星人", "你好太空"];
+// No readable web edition was found outside Sina/NetEase. They are used when a
+// readable page turns up, but missing them is not a coverage gap.
 export const OPTIONAL_SOURCES = [];
 
 // 36Kr carries synced articles from other media under the media's own account.
@@ -42,7 +45,7 @@ const KR36_STREAMS = [
 const RSS_SOURCES = [
   { name: "量子位", url: "https://www.qbitai.com/feed" },
   { name: "AI前线/InfoQ", url: "https://www.infoq.cn/feed" },
-  { name: "极客公园", url: "https://www.geekpark.net/rss" }
+  { name: "极客公园", url: "https://www.geekpark.net/rss" },
 ];
 
 const pad = n => String(n).padStart(2, "0");
@@ -58,7 +61,68 @@ async function kr36Items(earliest) {
   let failures = 0;
   for (const stream of KR36_STREAMS) {
     let callback = "";
-    for (let page = 0; page < stream.maxPag…770 tokens truncated…n    const url = `https://www.jazzyear.com/article_info.html?id=${id}`;
+    for (let page = 0; page < stream.maxPages; page += 1) {
+      const data = await postJson(KR36_GATEWAY + stream.path, {
+        partner_id: "web", timestamp: Date.now(),
+        param: { ...stream.param, pageSize: 50, pageEvent: page === 0 ? 0 : 1, pageCallback: callback, siteId: 1, platformId: 2 }
+      });
+      const list = data?.data?.itemList;
+      if (!Array.isArray(list)) { failures += 1; break; }
+      for (const entry of list) {
+        const m = entry.templateMaterial || {};
+        if (!m.widgetTitle || !m.publishTime) continue;
+        const flash = stream.label === "36氪快讯";
+        const author = String(m.authorName || "").trim();
+        const group = flash ? "36氪/硬氪" : groupFor36krAuthor(author);
+        out.push({
+          source: group === "36氪/硬氪" ? stream.label : group, group, author,
+          synced_on_36kr: group !== "36氪/硬氪",
+          title: decodeEntities(m.widgetTitle), summary: decodeEntities(m.summary || ""),
+          url: `https://www.36kr.com/${flash ? "newsflashes" : "p"}/${m.itemId || entry.itemId}`,
+          published_at: shanghaiTime(Number(m.publishTime))
+        });
+      }
+      const oldest = Math.min(...list.map(x => Number(x.templateMaterial?.publishTime)).filter(Number.isFinite));
+      callback = data.data.pageCallback;
+      if (!callback || !data.data.hasNextPage || oldest < earliest) break;
+    }
+  }
+  return { items: out, failures };
+}
+
+function rssItems(xml, name) {
+  return String(xml).split(/<item[\s>]/).slice(1).map(block => {
+    const pick = tag => decodeEntities(block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`))?.[1] || "").trim();
+    const time = Date.parse(pick("pubDate"));
+    return {
+      source: name, group: name, title: pick("title"),
+      summary: pick("description").replace(/<[^>]*>/g, " ").slice(0, 300),
+      url: pick("link").replace(/^http:/, "https:").replace(/[?&]utm_[^&]+/g, ""),
+      published_at: Number.isFinite(time) ? shanghaiTime(time) : null
+    };
+  });
+}
+
+function pedailyItems(html) {
+  const out = [];
+  const re = /<h3><a href="(https:\/\/news\.pedaily\.cn\/\d+\/\d+\.shtml)"[^>]*>([^<]+)<\/a><\/h3>[\s\S]{0,900}?<span class="date">(\d{4}-\d{2}-\d{2} \d{2}:\d{2})<\/span>/g;
+  let m;
+  while ((m = re.exec(html))) {
+    out.push({ source: "投资界", group: "投资界", title: decodeEntities(m[2]).trim(), url: m[1], published_at: `${m[3].replace(" ", "T")}:00+08:00` });
+  }
+  return out;
+}
+
+async function jazzyearItems() {
+  const home = await fetchText("https://www.jazzyear.com/");
+  if (!home.ok) throw new Error(`HTTP ${home.status}`);
+  const views = new Map();
+  for (const m of home.body.matchAll(/article_info\.html\?id=(\d+)">([^<]+)<\/a>[\s\S]{0,200}?<i>(\d+)<\/i>/g)) views.set(m[1], Number(m[3]));
+  const ids = [...new Set([...home.body.matchAll(/article_info\.html\?id=(\d+)/g)].map(m => m[1]))]
+    .sort((a, b) => Number(b) - Number(a)).slice(0, 10);
+  const out = [];
+  for (const id of ids) {
+    const url = `https://www.jazzyear.com/article_info.html?id=${id}`;
     const page = await fetchText(url);
     if (!page.ok) continue;
     const title = decodeEntities(page.body.match(/<title>([^<]*)/)?.[1] || "").trim();
@@ -210,9 +274,7 @@ export async function collect(date) {
     catch (error) { record(name, "unreachable", 0, String(error.message || error)); }
   }
   const synced = name => krItems.filter(item => item.group === name).length;
-  for (const name of SEARCH_SOURCES) {
-    record(name, "kr36_account", synced(name), "读取名单内媒体的同步文章，并定向搜索可核实发布账号的页面；无法读取时记录缺口");
-  }
+  for (const name of SEARCH_SOURCES) record(name, "kr36_account", synced(name), "读取名单内媒体的同步文章，并定向搜索可核实发布账号的页面；无法读取时记录缺口");
 
   const seen = new Set();
   const candidates = [];
