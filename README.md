@@ -4,7 +4,7 @@
 
 **Vercel Cron → GitHub Actions `cloud-daily.yml` → 程序采集 → 模型分步骤选稿 → 代码逐条核验 → GitHub OIDC → Vercel `/api/relay` → 飞书群机器人**
 
-云端流程是唯一的自动发送方。其他工具写进 `queue/` 的草稿不会触发发送；需要人工补发时，把推送文本提交到 `manual/日期.txt`。
+云端流程是唯一发送方。其他工具写进 `queue/` 或 `manual/` 的草稿不会触发发送；旧网页直发接口返回 410，旧手动发送工作流已移除，中继也拒绝它的身份。
 
 1. **触发**：Vercel Cron 每天两次调用 `/api/cron`：UTC 00:00（北京时间 08:00–08:59 内某刻，主运行，早于 08:30 时先等到 08:30）和 UTC 02:00（北京时间 10:00–10:59，备用）。GitHub 自带的 11:00 定时是最后兜底，可能延迟数小时。当天已发送或已尝试发送时，后续运行自动跳过。
 2. **窗口**：每期覆盖当天 08:30 之前的 36 小时；与前 3 期已发送内容按事件去重（`sent/`，2026.10.12 及以前读 `queue/`）。
@@ -46,9 +46,9 @@ Actions → Cloud embodied AI daily → Run workflow，mode 选 dry，可填 dat
 
 ## 防重复
 
-发送前先提交 `state/last-attempt.json` 占位，再调用中继；当天已有成功或尝试记录的运行一律跳过。中继结果不确定时不自动重试，避免重复发送。旧的 `daily-feishu.yml` 队列流程仍可用于人工兜底，同样读取这两个记录文件。
+发送前先提交 `state/last-attempt.json` 占位，再调用中继；当天已有成功或尝试记录的运行一律跳过。中继结果不确定时不自动重试，避免重复发送。手动启动也必须经过同一个云端流程及同一套防重复检查。
 
 ## 鉴权
 
-`/api/relay` 只接受本仓库 main 分支指定工作流的 GitHub OIDC token。`cloud-daily.yml` 的定时、`repository_dispatch` 和手动运行可以真实发送，提交 `ops/dry-run.txt` 触发的运行只能试跑；`daily-feishu.yml` 只接受 push。
+`/api/relay` 只接受本仓库 main 分支 `cloud-daily.yml` 的 GitHub OIDC token。定时、`repository_dispatch` 和手动运行可以真实发送，提交 `ops/dry-run.txt` 触发的运行只能试跑；其他工作流均被拒绝。旧 `/api/send` 对所有方法返回 410，不调用飞书。
 

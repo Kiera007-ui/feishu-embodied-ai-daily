@@ -5,14 +5,18 @@ const GITHUB_OIDC_AUDIENCE = "feishu-embodied-ai-daily-relay";
 const GITHUB_REPOSITORY = "Kiera007-ui/feishu-embodied-ai-daily";
 // events: allowed to call the relay; live: allowed to send for real.
 const GITHUB_WORKFLOW_REFS = {
-  "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/daily-feishu.yml@refs/heads/main": {
-    events: ["push"], live: ["push"]
-  },
   "Kiera007-ui/feishu-embodied-ai-daily/.github/workflows/cloud-daily.yml@refs/heads/main": {
     events: ["schedule", "workflow_dispatch", "repository_dispatch", "push"],
     live: ["schedule", "workflow_dispatch", "repository_dispatch"]
   }
 };
+
+export function workflowPolicy(workflowRef, eventName) {
+  const policy = GITHUB_WORKFLOW_REFS[workflowRef];
+  return policy?.events.includes(eventName)
+    ? { mayGoLive: policy.live.includes(eventName) }
+    : null;
+}
 const githubJwks = createRemoteJWKSet(
   new URL("https://token.actions.githubusercontent.com/.well-known/jwks")
 );
@@ -84,15 +88,15 @@ async function authorizeGithub(req) {
     if (payload.repository !== GITHUB_REPOSITORY) return null;
     if (payload.ref !== "refs/heads/main") return null;
     const eventName = String(payload.event_name || "");
-    const policy = GITHUB_WORKFLOW_REFS[String(payload.workflow_ref)];
-    if (!policy?.events.includes(eventName)) return null;
+    const policy = workflowPolicy(String(payload.workflow_ref), eventName);
+    if (!policy) return null;
 
     return {
       repository: String(payload.repository),
       sha: String(payload.sha || ""),
       runId: String(payload.run_id || ""),
       eventName,
-      mayGoLive: policy.live.includes(eventName)
+      mayGoLive: policy.mayGoLive
     };
   } catch (error) {
     console.error("[relay-auth]", error);
