@@ -4,6 +4,7 @@ import { readPage, plainText, pageTitle } from "./http.mjs";
 import { targetWindow, WINDOW_HOURS } from "./window.mjs";
 import { loadHistory } from "./history.mjs";
 import { normTitle } from "./collect.mjs";
+import { sourceError, publishedSourceError, isAllowedSourceUrl, payloadSourceError, SOURCES, accountPublisher } from "../lib/source-policy.js";
 
 export const MAX_ITEMS = 6;
 export const TARGET_MIN = 3;
@@ -11,14 +12,6 @@ export const EMPTY_NOTICE = `过去 ${WINDOW_HOURS} 小时内没有达到筛选�
 export const SHORT_NOTICE = "本期合格内容不足 3 条，未用旧闻或弱相关内容补足。";
 
 const BANNED_HOSTS = ["sina.com", "sina.com.cn", "sina.cn", "163.com"];
-// Company-issued material can only back up a media report, never be the source.
-const PRESS_RELEASE_HOSTS = ["prnewswire.com", "businesswire.com", "globenewswire.com", "accesswire.com",
-  "einpresswire.com", "newswire.ca", "prweb.com", "newsfilecorp.com", "hkexnews.hk", "sse.com.cn", "szse.cn", "cninfo.com.cn"];
-// Media that break their own stories. Other sites that merely restate these
-// scoops should be replaced by the original link.
-const SCOOP_HOSTS = ["36kr.com"];
-const SCOOP_REHOST = /(?:近日|此前).{0,20}(?:硬氪|36氪).{0,10}(?:消息称|获悉|报道)/i;
-const SCOOP_REHOST_AGAIN = /(?:综合|来源).{0,30}(?:硬氪|36氪)/i;
 
 const hostOf = url => new URL(url).hostname.toLowerCase().replace(/^www\./, "");
 const onList = (host, list) => list.some(d => host === d || host.endsWith(`.${d}`));
@@ -77,7 +70,9 @@ async function checkItem(candidate, window, fetchPage, seen, history) {
   if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("链接不是网页地址");
   const host = hostOf(item.url);
   if (onList(host, BANNED_HOSTS) || /新浪|网易/.test(item.source)) throw new Error("来源是新浪或网易");
-  if (candidate.source_kind === "company" || onList(host, PRESS_RELEASE_HOSTS)) throw new Error("来源是公司自发材料，需改用媒体报道");
+  const channelError = sourceError(item.source, item.url)
+    || payloadSourceError(`1. 【${item.tag}】${item.title}\n${item.summary}\n来源：${item.source}\n${item.url}\n`);
+  if (channelError) throw new Error(channelError);
   const eventKey = text(candidate.event_key, "event_key", 3, 120).toLowerCase();
   if (seen.keys.has(eventKey) || seen.urls.has(item.url)) throw new Error("与已入选条目重复");
   const old = history.find(h => h.url === item.url || (normTitle(h.title) && normTitle(h.title) === normTitle(item.title)));
@@ -91,10 +86,9 @@ async function checkItem(candidate, window, fetchPage, seen, history) {
 
   const page = await fetchPage(item.url);
   if (!page.ok) throw new Error(`链接打不开：HTTP ${page.status}`);
+  const publisherError = publishedSourceError(item.source, item.url, page);
+  if (publisherError) throw new Error(publisherError);
   const pageCopy = plainText(page.body);
-  if (!onList(host, SCOOP_HOSTS) && SCOOP_REHOST.test(pageCopy) && SCOOP_REHOST_AGAIN.test(pageCopy)) {
-    throw new Error("页面只复述 36氪/硬氪首发报道，应改用原始首发链接");
-  }
   const body = normalize(pageCopy);
   if (!body.includes(normalize(evidence))) throw new Error("页面里找不到事实摘录");
   const raw = normalize(page.body);
@@ -106,9 +100,10 @@ async function checkItem(candidate, window, fetchPage, seen, history) {
   for (const link of [...new Set(candidate.independent_reports || [])].slice(0, 6)) {
     let other;
     try { other = hostOf(link); } catch { continue; }
-    if (other === host || onList(other, BANNED_HOSTS) || reports.some(r => r.host === other)) continue;
+    if (other === host || !isAllowedSourceUrl(link) || reports.some(r => r.host === other)) continue;
     const res = await fetchPage(link);
-    if (res.ok) reports.push({ host: other, url: link });
+    const publisher = SOURCES.find(s => onList(other, s.domains))?.name || accountPublisher(res.body, res.url || link);
+    if (res.ok && publisher && !publishedSourceError(publisher, link, res)) reports.push({ host: other, url: link });
   }
   seen.keys.add(eventKey);
   seen.urls.add(item.url);

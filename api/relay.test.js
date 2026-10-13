@@ -40,7 +40,7 @@ test("retired manual endpoint and unauthenticated relay never send", async t => 
 const payload = (date, n, tag = "【场景】") => [
   `具身智能每日推｜${date}`,
   "",
-  ...Array.from({ length: n }, (_, i) => `${i + 1}. ${tag}已核实事件${i + 1}\n内容\n来源：测试\nhttps://example.com/${i + 1}\n`)
+  ...Array.from({ length: n }, (_, i) => `${i + 1}. ${tag}已核实事件${i + 1}\n内容\n来源：36氪\nhttps://www.36kr.com/p/${i + 1}\n`)
 ].join("\n");
 
 test("relay accepts one to six tagged items", () => {
@@ -56,5 +56,15 @@ test("relay requires a notice when there are no items", () => {
 
 test("relay rejects untagged items and banned links", () => {
   assert.match(validatePayload(payload("2026.10.09", 3, ""), "2026.10.09"), /topic tag/);
-  assert.match(validatePayload(payload("2026.10.09", 3).replace("https://example.com/1", "https://finance.sina.com.cn/x"), "2026.10.09"), /banned/);
+  assert.match(validatePayload(payload("2026.10.09", 3).replace("https://www.36kr.com/p/1", "https://finance.sina.com.cn/x"), "2026.10.09"), /banned/);
+});
+
+test("relay blocks outside publishers but permits approved-channel reposts", () => {
+  const date = "2026.10.13";
+  const approved = payload(date, 1).replace("内容", "36氪转载彭博报道，交易仍待完成。");
+  assert.equal(validatePayload(approved, date), null);
+  assert.match(validatePayload(approved.replace("https://www.36kr.com/p/1", "https://news.bloomberglaw.com/x"), date), /来源链接/);
+  assert.match(validatePayload(approved.replace("来源：36氪", "来源：彭博社"), date), /发布渠道/);
+  assert.match(validatePayload(approved.replace("来源：36氪\n", ""), date), /publisher/);
+  assert.match(validatePayload(approved.replace("交易仍待完成。", "参考 https://www.bloomberg.com/x"), date), /outside/);
 });

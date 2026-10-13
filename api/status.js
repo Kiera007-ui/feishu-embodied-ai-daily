@@ -1,12 +1,16 @@
+import { ALLOWED_SOURCE_NAMES } from "../lib/source-policy.js";
+
 export default function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
   return res.status(200).json({
     ok: true,
-    version: "cloud-only-v3",
+    version: "cloud-only-approved-publishers-v4",
     architecture: "vercel-cron -> github-cloud-daily -> vercel-relay -> feishu",
     sender: "cloud-daily.yml",
     manual_send_enabled: false,
     queue_send_enabled: false,
+    allowed_publishers: ALLOWED_SOURCE_NAMES,
+    approved_publisher_reposts_allowed: true,
     feishu_webhook_configured: Boolean(process.env.FEISHU_WEBHOOK_URL)
   });
 }

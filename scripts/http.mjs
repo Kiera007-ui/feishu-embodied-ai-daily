@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { isAllowedSourceUrl } from "../lib/source-policy.js";
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36";
 const MARK = "\n__DAILY_HTTP__";
@@ -55,6 +56,7 @@ export function pageTitle(html) {
 const JIQIZHIXIN_ARTICLE = /^https?:\/\/(?:www\.)?jiqizhixin\.com\/articles\/([\w-]+)/i;
 
 export async function readPage(url) {
+  if (!isAllowedSourceUrl(url)) return { ok: false, status: 0, body: "", url, error: "发布渠道不在允许名单内" };
   const jqzx = JIQIZHIXIN_ARTICLE.exec(String(url));
   if (jqzx) {
     const api = await fetchText(`https://www.jiqizhixin.com/api/article_library/articles/${jqzx[1]}.json`);

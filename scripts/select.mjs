@@ -4,6 +4,7 @@ import { readPage, plainText } from "./http.mjs";
 import { targetWindow, shanghaiTime } from "./window.mjs";
 import { REQUIRED_SOURCES, SEARCH_SOURCES, OPTIONAL_SOURCES, readCandidate } from "./collect.mjs";
 import { loadHistory } from "./history.mjs";
+import { sourceError } from "../lib/source-policy.js";
 
 // The selection runs in stages so each judgement gets its own search budget:
 // sweep (find what the lists missed) -> triage (group into events and rank)
@@ -11,7 +12,6 @@ import { loadHistory } from "./history.mjs";
 const MAX_EVENTS = Number(process.env.DAILY_MAX_EVENTS || 12);
 const CONCURRENCY = Number(process.env.DAILY_CONCURRENCY || 4);
 const VERIFY_BUDGET_MS = Number(process.env.DAILY_VERIFY_MINUTES || 35) * 60_000;
-const BANNED = /(^|\.)(sina\.com|sina\.com\.cn|sina\.cn|163\.com)$/i;
 
 const str = { type: "string" };
 const obj = properties => ({ type: "object", additionalProperties: false, required: Object.keys(properties), properties });
@@ -71,17 +71,17 @@ ${listed}
 
 请用网页搜索补查以下来源在窗口内发表的文章：
 - ${[...new Set([...SEARCH_SOURCES, ...weak])].join("、")}：每家至少两次定向检索，例如“来源名 + 日期 + 机器人/具身”和“来源名 + 日期 + 深海/航天/低空”。
-- ${OPTIONAL_SOURCES.join("、")}：检索它们在新浪、网易以外的可读网页（媒体官网、36氪、投资界创投号、搜狐号等）。
-只返回窗口内发表、与规则范围相关、你实际打开过的文章；同一篇文章优先返回该媒体自己网站的链接。searched 逐一记录每个来源的实际检索词和结果。
+- 新智元、硅星人、你好太空：检索名单内媒体网站的刊登页，或能核实账号名称的 36氪同步页、微信公众号页；不能用任意同名转载账号代替。
+只返回允许名单内媒体在窗口内发布、与规则范围相关、你实际打开过的文章。source 填发布该页面的名单内媒体，不填被转载的原始媒体。转载允许，保留名单内的刊登链接，不追换到名单外原文。searched 逐一记录每个来源的实际检索词和结果。
 
 已采集的窗口内候选（不必重复返回）：
 ${known}`;
-  const eventsTask = `你在为《具身智能每日推》补充候选文章。请用中英文网页搜索，广泛检索窗口内具身智能及相关硬科技的新消息，覆盖：人形机器人、具身模型、灵巧手与核心部件、机器人融资/订单/量产/部署/上市、仓储物流与无人配送、深海/航天/低空智能装备、重要政策。
+  const eventsTask = `你在为《具身智能每日推》补充候选文章。请仅在允许名单内媒体发布的网页中，检索窗口内具身智能及相关硬科技的新消息，覆盖：人形机器人、具身模型、灵巧手与核心部件、机器人融资/订单/量产/部署/上市、仓储物流与无人配送、深海/航天/低空智能装备、重要政策。名单是检索、核查和最终发布来源的硬边界，不能扩大为其他专业媒体。
 特别注意：
 - 标题和导语不点名“机器人”、但正文是机器人系统发布或部署的报道（例如在 IROS 等展会上同时发布本体、灵巧手、数据手套）。
-- 机器人公司自己发布的新品、融资、订单。返回时同时找专业媒体对同一事实的报道，优先返回媒体报道链接。
-- 境外专业媒体（Reuters、TechCrunch、IEEE Spectrum、The Robot Report 等）。
-只返回窗口内发表、你实际打开过的文章，最多 25 篇。searched 记录检索主题和结果。
+- 名单内媒体刊登的机器人新品、融资、订单报道，包括它们转载其他来源的内容；不要求独立采写。
+- 若名单内文章引用彭博、Reuters等原始来源，可使用该刊登页，但不能改用名单外原文作为候选或补充证据。
+只返回名单内媒体在窗口内发布、你实际打开过的文章，最多 25 篇。source 填名单内的发布媒体；searched 记录检索主题和结果。
 
 已采集的窗口内候选（不必重复返回）：
 ${known}`;
@@ -100,9 +100,7 @@ ${known}`;
   const seen = new Set(collected.candidates.map(c => c.url));
   const added = [];
   for (const c of found) {
-    let host;
-    try { host = new URL(c.url).hostname; } catch { continue; }
-    if (BANNED.test(host) || seen.has(c.url)) continue;
+    if (sourceError(c.source, c.url) || seen.has(c.url)) continue;
     seen.add(c.url);
     added.push({ title: c.title, url: c.url, source: c.source, group: c.source, published_at: c.published_at,
       summary: c.note, origin: "search", in_window: true });
@@ -145,12 +143,12 @@ ${historyBlock(history)}
 
 ## 任务
 只核查下面这一个事件能否入选，并在能入选时写出条目。需要时联网检索：
-- 追溯核心事实的首次公开披露时间（检查正文提到的公告、采访、往日报道和公司页面）；
-- 如果现有候选是公司自发内容，找专业媒体对同一事实的报道作来源；
-- 如果现有候选是 36氪等平台同步的其他媒体文章，找该媒体自己网站上的同一篇文章，用它作链接；
-- 找其他独立媒体的报道，评估热度。
+- 仅在允许名单内刊登的正文和往日报道中追溯核心事实的首次披露时间；无法确认则 watch，不去名单外补证；
+- 按发布媒体判断来源，名单内转载可以入选，无需独立采写，不因引用彭博等名单外原始信源而排除；
+- 保留名单内刊登页；仅当另一名单内媒体有同文官网页时才可替换，绝不能追换到名单外原文；
+- 只用名单内媒体报道评估热度，转载同一原始报道不算多家独立报道。
 decision：include（满足全部规则，写完整条目）；watch（值得跟进但暂无合格来源或时间无法确认）；reject（不符合规则）。reason 用一句话说明。
-不是 include 时，条目字段填空字符串、independent_reports 填空数组。source_kind：最终来源是专业媒体填 media，是公司自发材料填 company，其他填 other。
+不是 include 时，条目字段填空字符串、independent_reports 填空数组。source 和 source_kind 按刊登页面所属媒体填写，名单内刊登页填 media，不能填被转载的原始机构。independent_reports 只放允许名单内链接。
 evidence_quote 必须从 url 页面原文逐字摘录。
 
 ## 事件
@@ -224,7 +222,7 @@ export async function select(date, collected, { root = process.cwd() } = {}) {
 
   const swept = await sweep(date, collected, ctx);
   metas.push(...swept.metas);
-  const candidates = [...collected.candidates.filter(c => c.in_window), ...swept.added];
+  const candidates = [...collected.candidates.filter(c => c.in_window && c.read_status === "readable" && !sourceError(c.source, c.url)), ...swept.added];
   const byUrl = new Map(candidates.map(c => [c.url, c]));
   console.log(`[select] ${candidates.length} candidates in window, ${history.length} history items`);
 
@@ -257,7 +255,7 @@ export async function select(date, collected, { root = process.cwd() } = {}) {
     metas.push(v.meta);
     const r = v.value;
     if (r.decision === "include" && r.source_kind === "company") {
-      watchlist.push({ name: title, reason: "只有公司自发材料，未找到专业媒体报道", url: r.url || url });
+      watchlist.push({ name: title, reason: "未找到名单内媒体的刊登页", url: r.url || url });
     } else if (r.decision === "include") {
       included.push({ ...r, event_key: r.event_key || v.event.event_key, priority: v.event.priority });
     } else if (r.decision === "watch") {

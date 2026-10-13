@@ -1,9 +1,10 @@
 import http from "node:http";
 import https from "node:https";
+import { SEARCH_DOMAINS } from "../lib/source-policy.js";
 
 // OPENAI_BASE_URL lets the pipeline use an OpenAI-compatible gateway.
 export const API = `${(process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").replace(/\/+$/, "")}/responses`;
-export const BANNED_SEARCH_DOMAINS = ["sina.com.cn", "sina.cn", "sina.com", "163.com"];
+export const searchTool = () => ({ type: "web_search", filters: { allowed_domains: [...SEARCH_DOMAINS] } });
 export const model = () => process.env.OPENAI_MODEL || "gpt-6.1-sol";
 
 // Node's fetch gives up when response headers take more than 5 minutes, and a
@@ -108,7 +109,7 @@ export async function runModel({ name, input, schema, effort = "medium", search 
     text: { format: { type: "json_schema", name, strict: true, schema } }
   };
   if (search) {
-    body.tools = [{ type: "web_search", filters: { blocked_domains: BANNED_SEARCH_DOMAINS } }];
+    body.tools = [searchTool()];
     body.include = ["web_search_call.action.sources"];
   }
   const started = Date.now();

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { fetchText, postJson, postForm, decodeEntities, plainText, readPage } from "./http.mjs";
 import { targetWindow, shanghaiTime } from "./window.mjs";
+import { ALLOWED_SOURCE_NAMES, sourceError, publishedSourceError } from "../lib/source-policy.js";
 
 // Topics the daily covers. Matching only narrows the candidate list; the
 // model still reads each article and decides relevance.
@@ -13,13 +14,10 @@ export const TOPIC = new RegExp([
   "drone", "rocket", "satellite", "spacecraft", "underwater", "subsea", "autonomous"
 ].join("|"), "i");
 
-// Media the daily must cover. All of them except 新智元 have a readable article
-// list; 新智元 is read from its 36Kr account and searched by the model.
-export const REQUIRED_SOURCES = ["36氪/硬氪", "量子位", "机器之心", "新智元", "晚点LatePost", "极客公园", "投资界", "AI前线/InfoQ", "甲子光年"];
-export const SEARCH_SOURCES = ["新智元"];
-// No readable web edition was found outside Sina/NetEase. They are used when a
-// readable page turns up, but missing them is not a coverage gap.
-export const OPTIONAL_SOURCES = ["硅星人", "你好太空"];
+// Every approved channel must be checked, including channels without a feed.
+export const REQUIRED_SOURCES = ALLOWED_SOURCE_NAMES;
+export const SEARCH_SOURCES = ["新智元", "硅星人", "你好太空"];
+export const OPTIONAL_SOURCES = [];
 
 // 36Kr carries synced articles from other media under the media's own account.
 const KR36_ACCOUNTS = [
@@ -44,9 +42,7 @@ const KR36_STREAMS = [
 const RSS_SOURCES = [
   { name: "量子位", url: "https://www.qbitai.com/feed" },
   { name: "AI前线/InfoQ", url: "https://www.infoq.cn/feed" },
-  { name: "极客公园", url: "https://www.geekpark.net/rss" },
-  { name: "TechCrunch Robotics", url: "https://techcrunch.com/category/robotics/feed/" },
-  { name: "IEEE Spectrum Robotics", url: "https://spectrum.ieee.org/feeds/topic/robotics.rss" }
+  { name: "极客公园", url: "https://www.geekpark.net/rss" }
 ];
 
 const pad = n => String(n).padStart(2, "0");
@@ -62,68 +58,7 @@ async function kr36Items(earliest) {
   let failures = 0;
   for (const stream of KR36_STREAMS) {
     let callback = "";
-    for (let page = 0; page < stream.maxPages; page += 1) {
-      const data = await postJson(KR36_GATEWAY + stream.path, {
-        partner_id: "web", timestamp: Date.now(),
-        param: { ...stream.param, pageSize: 50, pageEvent: page === 0 ? 0 : 1, pageCallback: callback, siteId: 1, platformId: 2 }
-      });
-      const list = data?.data?.itemList;
-      if (!Array.isArray(list)) { failures += 1; break; }
-      for (const entry of list) {
-        const m = entry.templateMaterial || {};
-        if (!m.widgetTitle || !m.publishTime) continue;
-        const flash = stream.label === "36氪快讯";
-        const author = String(m.authorName || "").trim();
-        const group = flash ? "36氪/硬氪" : groupFor36krAuthor(author);
-        out.push({
-          source: group === "36氪/硬氪" ? stream.label : group, group, author,
-          synced_on_36kr: group !== "36氪/硬氪",
-          title: decodeEntities(m.widgetTitle), summary: decodeEntities(m.summary || ""),
-          url: `https://www.36kr.com/${flash ? "newsflashes" : "p"}/${m.itemId || entry.itemId}`,
-          published_at: shanghaiTime(Number(m.publishTime))
-        });
-      }
-      const oldest = Math.min(...list.map(x => Number(x.templateMaterial?.publishTime)).filter(Number.isFinite));
-      callback = data.data.pageCallback;
-      if (!callback || !data.data.hasNextPage || oldest < earliest) break;
-    }
-  }
-  return { items: out, failures };
-}
-
-function rssItems(xml, name) {
-  return String(xml).split(/<item[\s>]/).slice(1).map(block => {
-    const pick = tag => decodeEntities(block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`))?.[1] || "").trim();
-    const time = Date.parse(pick("pubDate"));
-    return {
-      source: name, group: name, title: pick("title"),
-      summary: pick("description").replace(/<[^>]*>/g, " ").slice(0, 300),
-      url: pick("link").replace(/^http:/, "https:").replace(/[?&]utm_[^&]+/g, ""),
-      published_at: Number.isFinite(time) ? shanghaiTime(time) : null
-    };
-  });
-}
-
-function pedailyItems(html) {
-  const out = [];
-  const re = /<h3><a href="(https:\/\/news\.pedaily\.cn\/\d+\/\d+\.shtml)"[^>]*>([^<]+)<\/a><\/h3>[\s\S]{0,900}?<span class="date">(\d{4}-\d{2}-\d{2} \d{2}:\d{2})<\/span>/g;
-  let m;
-  while ((m = re.exec(html))) {
-    out.push({ source: "投资界", group: "投资界", title: decodeEntities(m[2]).trim(), url: m[1], published_at: `${m[3].replace(" ", "T")}:00+08:00` });
-  }
-  return out;
-}
-
-async function jazzyearItems() {
-  const home = await fetchText("https://www.jazzyear.com/");
-  if (!home.ok) throw new Error(`HTTP ${home.status}`);
-  const views = new Map();
-  for (const m of home.body.matchAll(/article_info\.html\?id=(\d+)">([^<]+)<\/a>[\s\S]{0,200}?<i>(\d+)<\/i>/g)) views.set(m[1], Number(m[3]));
-  const ids = [...new Set([...home.body.matchAll(/article_info\.html\?id=(\d+)/g)].map(m => m[1]))]
-    .sort((a, b) => Number(b) - Number(a)).slice(0, 10);
-  const out = [];
-  for (const id of ids) {
-    const url = `https://www.jazzyear.com/article_info.html?id=${id}`;
+    for (let page = 0; page < stream.maxPag…770 tokens truncated…n    const url = `https://www.jazzyear.com/article_info.html?id=${id}`;
     const page = await fetchText(url);
     if (!page.ok) continue;
     const title = decodeEntities(page.body.match(/<title>([^<]*)/)?.[1] || "").trim();
@@ -214,8 +149,12 @@ async function kr36Engagement(url) {
 }
 
 export async function readCandidate(item) {
+  const error = sourceError(item.source, item.url);
+  if (error) { item.read_status = error; return; }
   const page = await readPage(item.url);
   if (!page.ok) { item.read_status = "HTTP " + page.status; return; }
+  const publisherError = publishedSourceError(item.source, item.url, page);
+  if (publisherError) { item.read_status = publisherError; return; }
   const body = plainText(page.body);
   if (body.length < 200) { item.read_status = "正文过短"; return; }
   item.article_text = body.slice(0, 9000);
@@ -271,13 +210,14 @@ export async function collect(date) {
     catch (error) { record(name, "unreachable", 0, String(error.message || error)); }
   }
   const synced = name => krItems.filter(item => item.group === name).length;
-  record("新智元", "kr36_account", synced("新智元"), "无官网文章列表；读取其 36氪账号同步文章，并由模型定向搜索");
-  for (const name of OPTIONAL_SOURCES) record(name, "optional", synced(name), "未找到新浪/网易以外的固定网页列表；有可读网页时可用");
+  for (const name of SEARCH_SOURCES) {
+    record(name, "kr36_account", synced(name), "读取名单内媒体的同步文章，并定向搜索可核实发布账号的页面；无法读取时记录缺口");
+  }
 
   const seen = new Set();
   const candidates = [];
   for (const item of preferOwnSite(all)) {
-    if (!item.title || !item.url || seen.has(item.url)) continue;
+    if (!item.title || !item.url || seen.has(item.url) || sourceError(item.source, item.url)) continue;
     seen.add(item.url);
     const time = Date.parse(item.published_at || "");
     if (!Number.isFinite(time) || time < earliest || time >= end + 3 * 3600_000) continue;
