@@ -37,10 +37,15 @@ const EDITOR_SCHEMA = obj({ order: arr(obj({ event_key: str, keep: { type: "bool
 
 async function context(date) {
   const { start, end } = targetWindow(date);
+  let focus = "";
+  try {
+    const configured = JSON.parse(await fs.readFile(new URL("../config/daily-focus.json", import.meta.url), "utf8"));
+    if (configured.date === date) focus = configured.instructions || "";
+  } catch {}
   const rules = (await fs.readFile(new URL("../prompts/rules.md", import.meta.url), "utf8"))
     .replaceAll("{{WINDOW_START}}", shanghaiTime(start)).replaceAll("{{WINDOW_END}}", shanghaiTime(end));
   const cases = await fs.readFile(new URL("../prompts/cases.md", import.meta.url), "utf8");
-  return { start, end, rules, cases };
+  return { start, end, rules, cases, focus };
 }
 
 const historyBlock = history => history.length
@@ -63,25 +68,26 @@ async function pool(items, limit, worker) {
 }
 
 async function sweep(date, collected, ctx) {
+  const focus = ctx.focus ? "\n\n## 本期定向关注\n" + ctx.focus : "";
   const listed = collected.coverage.map(r => `${r.source}：${r.status}，列表 ${r.found} 篇，窗口内相关 ${r.relevant ?? 0} 篇`).join("\n");
   const known = collected.candidates.filter(c => c.in_window).map(c => `- ${c.title}（${c.source}）`).join("\n") || "（无）";
   const weak = collected.coverage.filter(r => REQUIRED_SOURCES.includes(r.source) && (r.status === "unreachable" || !r.relevant)).map(r => r.source);
-  const sourcesTask = `你在为《具身智能每日推》补充候选文章。程序从各来源文章列表采集的情况如下：
+  const sourcesTask = `你在为《具身智能每日推》补充候选文章。${focus}\n程序从各来源文章列表采集的情况如下：
 ${listed}
 
 请用网页搜索补查以下来源在窗口内发表的文章：
-- ${[...new Set([...SEARCH_SOURCES, ...weak])].join("、")}：每家至少两次定向检索，例如“来源名 + 日期 + 机器人/具身”和“来源名 + 日期 + 深海/航天/低空”。
+- ${[...new Set([...SEARCH_SOURCES, ...weak])].join("、")}：每家至少两次定向检索；同时执行本期定向关注中的具体关键词组合。
 - 新智元、硅星人、你好太空：检索名单内媒体网站的刊登页，或能核实账号名称的 36氪同步页、微信公众号页；不能用任意同名转载账号代替。
 只返回允许名单内媒体在窗口内发布、与规则范围相关、你实际打开过的文章。source 填发布该页面的名单内媒体，不填被转载的原始媒体。转载允许，保留名单内的刊登链接，不追换到名单外原文。searched 逐一记录每个来源的实际检索词和结果。
 
 已采集的窗口内候选（不必重复返回）：
 ${known}`;
-  const eventsTask = `你在为《具身智能每日推》补充候选文章。请仅在允许名单内媒体发布的网页中，检索窗口内具身智能及相关硬科技的新消息，覆盖：人形机器人、具身模型、灵巧手与核心部件、机器人融资/订单/量产/部署/上市、仓储物流与无人配送、深海/航天/低空智能装备、重要政策。名单是检索、核查和最终发布来源的硬边界，不能扩大为其他专业媒体。
+  const eventsTask = `你在为《具身智能每日推》补充候选文章。${focus}\n请仅在允许名单内媒体发布的网页中，检索窗口内具身智能及相关硬科技的新消息，覆盖：人形机器人、具身模型、灵巧手与核心部件、机器人融资/订单/量产/部署/上市、仓储物流与无人配送、深海/航天/低空智能装备、重要政策。名单是检索、核查和最终发布来源的硬边界，不能扩大为其他专业媒体。
 特别注意：
 - 标题和导语不点名“机器人”、但正文是机器人系统发布或部署的报道（例如在 IROS 等展会上同时发布本体、灵巧手、数据手套）。
 - 名单内媒体刊登的机器人新品、融资、订单报道，包括它们转载其他来源的内容；不要求独立采写。
 - 若名单内文章引用彭博、Reuters等原始来源，可使用该刊登页，但不能改用名单外原文作为候选或补充证据。
-只返回名单内媒体在窗口内发布、你实际打开过的文章，最多 25 篇。source 填名单内的发布媒体；searched 记录检索主题和结果。
+只返回名单内媒体在窗口内发布、你实际打开过的文章，最多 25 篇。source 填名单内的发布媒体；searched 记录检索主题和结果。工博会专题必须打开正文判断，不能只凭标题；正文必须包含具体机器人／智能装备、发布、应用、订单、部署或产业化事实，否则剔除。
 
 已采集的窗口内候选（不必重复返回）：
 ${known}`;

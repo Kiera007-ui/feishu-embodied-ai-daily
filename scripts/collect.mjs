@@ -9,7 +9,7 @@ export const TOPIC = new RegExp([
   "机器人", "具身", "人形", "四足", "机器狗", "灵巧手", "机械臂", "协作臂", "关节模组", "执行器", "减速器", "丝杠",
   "触觉", "世界模型", "VLA", "物理AI", "物理 AI", "Physical AI",
   "水下", "深海", "海洋装备", "无人船", "航天", "火箭", "卫星", "太空", "低空", "无人机", "eVTOL", "飞行汽车",
-  "仓储", "物流自动化", "AGV", "AMR", "Robotaxi", "自动驾驶", "无人配送",
+  "仓储", "物流自动化", "AGV", "AMR", "Robotaxi", "自动驾驶", "无人配送", "工博会", "中国国际工业博览会", "工业博览会", "工业机器人", "智能制造",
   "robot", "humanoid", "embodied", "quadruped", "dexterous", "manipulat", "actuator", "world model",
   "drone", "rocket", "satellite", "spacecraft", "underwater", "subsea", "autonomous"
 ].join("|"), "i");
