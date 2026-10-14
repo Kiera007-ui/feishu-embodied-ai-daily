@@ -51,11 +51,12 @@ test("relay accepts up to six items with at most three per topic", () => {
   assert.match(validatePayload(payload("2026.10.09", 7), "2026.10.09"), /at most 6/);
 });
 
-test("relay blocks funding relabels and the rejected Shita event", () => {
+test("relay counts only final labels and still blocks the rejected Shita event", () => {
   const date = "2026.10.14";
   const financing = payload(date, 4).replace(/【场景】已核实事件([1234])/g, (_, n) =>
     `【${["融资", "航天", "深海", "低空"][Number(n) - 1]}】机器人公司${n}完成新一轮融资`);
-  assert.match(validatePayload(financing, date), /融资.*3 条/);
+  assert.equal(validatePayload(financing, date), null);
+  assert.match(validatePayload(payload(date, 4, "【融资】"), date), /融资.*3 条/);
   const excluded = payload(date, 1).replace("已核实事件1", "视塔机器人完成天使轮融资");
   assert.match(validatePayload(excluded, date), /用户剔除/);
 });

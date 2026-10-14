@@ -5,8 +5,9 @@ export default function handler(req, res) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
   return res.status(200).json({
     ok: true,
-    version: "cloud-only-editorial-cap-v5",
+    version: "cloud-only-label-cap-v6",
     max_items_per_topic: MAX_ITEMS_PER_TOPIC,
+    topic_limit_basis: "final_display_tag",
     architecture: "vercel-cron -> github-cloud-daily -> vercel-relay -> feishu",
     sender: "cloud-daily.yml",
     manual_send_enabled: false,

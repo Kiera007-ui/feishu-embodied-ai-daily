@@ -143,10 +143,9 @@ export async function buildDaily(date, model, { fetchPage = readPage, history = 
       const exclusion = excludedEventReason(candidate);
       if (exclusion) throw new Error(exclusion);
       const item = await checkItem(candidate, window, fetchPage, seen, history);
-      const classified = { ...item, topic_group: candidate.topic_group };
-      const limitError = topicLimitError(classified, topics);
+      const limitError = topicLimitError(item, topics);
       if (limitError) throw new Error(limitError);
-      countTopics(classified, topics);
+      countTopics(item, topics);
       kept.push(item);
     }
     catch (error) { dropped.push({ title: candidate?.title, url: candidate?.url, reason: error.message }); }
@@ -175,6 +174,10 @@ export function renderReport(date, collected, model, result) {
   out.push("", "## 入选与热度", "");
   for (const item of result.kept) {
     out.push(`- 【${item.tag}】${item.title}（${item.source}）：独立报道 ${item.heat.independent_reports.length} 家。${item.heat.note}`);
+  }
+  if (model?.editorial_decisions?.length) {
+    out.push("", "## 重要性与标签取舍", "");
+    for (const d of model.editorial_decisions) out.push(`- ${cell(d.title)}：${d.keep ? "主编保留" : "主编剔除"}；${cell(d.reason)}`);
   }
   if (result.dropped.length) {
     out.push("", "## 代码剔除", "");

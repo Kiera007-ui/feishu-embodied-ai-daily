@@ -81,22 +81,23 @@ test("topic cap keeps the editor-ranked three and allows other topics to fill sl
   assert.match(result.dropped[0].reason, /融资.*3 条/);
 });
 
-test("domain tags and funding synonyms cannot hide a fourth financing event", async () => {
-  const tags = ["融资", "航天", "投融资", "深海"];
+test("other final tags do not consume financing quota even when titles mention funding", async () => {
+  const tags = ["融资", "融资", "融资", "航天", "深海", "融资"];
   const result = await buildDaily(DATE, model(tags.map((tag, i) => item(i + 1, {
     tag, title: `机器人企业${i + 1}完成新一轮融资`
   }))), { fetchPage: pages({}) });
-  assert.equal(result.kept.length, 3);
+  assert.equal(result.kept.length, 5);
+  assert.deepEqual(result.kept.map(i => i.tag), tags.slice(0, 5));
   assert.match(result.dropped[0].reason, /融资.*3 条/);
 });
 
-test("body-derived topic groups cap differently labelled events", async () => {
+test("legacy semantic groups do not affect the final-label quota", async () => {
   const tags = ["航天", "深海", "低空", "物流"];
   const result = await buildDaily(DATE, model(tags.map((tag, i) => item(i + 1, {
     tag, topic_group: "场景"
   }))), { fetchPage: pages({}) });
-  assert.equal(result.kept.length, 3);
-  assert.match(result.dropped[0].reason, /场景.*3 条/);
+  assert.equal(result.kept.length, 4);
+  assert.equal(result.dropped.length, 0);
 });
 
 test("invalid candidates do not consume topic quota", async () => {
