@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { payloadSourceError } from "../lib/source-policy.js";
+import { payloadEditorialError } from "../lib/editorial-policy.js";
 
 const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const GITHUB_OIDC_AUDIENCE = "feishu-embodied-ai-daily-relay";
@@ -73,7 +74,7 @@ export function validatePayload(text, requestedDate) {
   if (containsBannedUrl(text)) {
     return "Payload contains a banned final-link domain";
   }
-  return payloadSourceError(text);
+  return payloadSourceError(text) || payloadEditorialError(text);
 }
 
 async function authorizeGithub(req) {

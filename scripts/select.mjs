@@ -28,7 +28,7 @@ const TRIAGE_SCHEMA = obj({
 });
 export const VERIFY_SCHEMA = obj({
   decision: { type: "string", enum: ["include", "watch", "reject"] },
-  reason: str, event_key: str, tag: str, title: str, summary: str, source: str, url: str,
+  reason: str, event_key: str, tag: str, topic_group: str, title: str, summary: str, source: str, url: str,
   source_kind: { type: "string", enum: ["media", "company", "other"] },
   published_at: str, first_disclosed_at: str, evidence_quote: str,
   independent_reports: arr(str), heat_note: str
@@ -155,7 +155,7 @@ ${historyBlock(history)}
 - 只用名单内媒体报道评估热度，转载同一原始报道不算多家独立报道。
 decision：include（满足全部规则，写完整条目）；watch（值得跟进但暂无合格来源或时间无法确认）；reject（不符合规则）。reason 用一句话说明。
 不是 include 时，条目字段填空字符串、independent_reports 填空数组。source 和 source_kind 按刊登页面所属媒体填写，名单内刊登页填 media，不能填被转载的原始机构。independent_reports 只放允许名单内链接。
-evidence_quote 必须从 url 页面原文逐字摘录。
+evidence_quote 必须从 url 页面原文逐字摘录。topic_group 按正文核心事实填写统一分类，融资主导的领域报道也填“融资”；按重要性规则剔除只有泛泛用途和研发方向的普通融资官宣。
 
 ## 事件
 ${event.headline}（event_key: ${event.event_key}；初筛理由：${event.why}）
@@ -172,10 +172,10 @@ async function editor(items, history, ctx) {
 ${historyBlock(history)}
 
 ## 任务
-你是主编。下面是逐条核查后可以入选的条目。请：去掉同一事件的重复条目和与前 3 期重复的条目；按重要性和热度排序；keep=true 的最多 8 条（程序还会逐条硬校验，最终最多发 6 条）。不要改写条目内容。每条都要出现在 order 里，reason 一句话。
+你是主编。下面是逐条核查后可以入选的条目。请：去掉同一事件的重复条目和与前 3 期重复的条目；按重要性和热度排序；keep=true 的最多 8 条（程序还会逐条硬校验，最终最多发 6 条）。同一展示标签或 topic_group 最多保留 3 条；融资不得改标为其他领域来绕过上限。读摘要中的具体新事实，先比产业影响、产品能力、客户／订单／部署／量产证据，再考虑融资规模、估值变化，最后用热度辅助，剔除低价值官宣。超过三条的组必须比较并在 reason 写出保留或剔除理由，不能机械保留前 3 条。不要改写条目内容。每条都要出现在 order 里，reason 一句话。
 
 ## 条目
-${JSON.stringify(items.map(i => ({ event_key: i.event_key, tag: i.tag, title: i.title, summary: i.summary, source: i.source, url: i.url, published_at: i.published_at, heat_note: i.heat_note, independent_reports: i.independent_reports.length })), null, 1)}`;
+${JSON.stringify(items.map(i => ({ event_key: i.event_key, tag: i.tag, topic_group: i.topic_group, title: i.title, summary: i.summary, source: i.source, url: i.url, published_at: i.published_at, heat_note: i.heat_note, independent_reports: i.independent_reports.length })), null, 1)}`;
   return runModel({ name: "editor", input, schema: EDITOR_SCHEMA, effort: "high", timeout: 10 * 60_000 });
 }
 

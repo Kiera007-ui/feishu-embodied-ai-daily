@@ -43,10 +43,21 @@ const payload = (date, n, tag = "【场景】") => [
   ...Array.from({ length: n }, (_, i) => `${i + 1}. ${tag}已核实事件${i + 1}\n内容\n来源：36氪\nhttps://www.36kr.com/p/${i + 1}\n`)
 ].join("\n");
 
-test("relay accepts one to six tagged items", () => {
+test("relay accepts up to six items with at most three per topic", () => {
   assert.equal(validatePayload(payload("2026.10.09", 1), "2026.10.09"), null);
-  assert.equal(validatePayload(payload("2026.10.09", 6), "2026.10.09"), null);
+  const mixed = payload("2026.10.09", 6).replace(/([456]\. )【场景】/g, "$1【模型】");
+  assert.equal(validatePayload(mixed, "2026.10.09"), null);
+  assert.match(validatePayload(payload("2026.10.09", 4), "2026.10.09"), /场景.*3 条/);
   assert.match(validatePayload(payload("2026.10.09", 7), "2026.10.09"), /at most 6/);
+});
+
+test("relay blocks funding relabels and the rejected Shita event", () => {
+  const date = "2026.10.14";
+  const financing = payload(date, 4).replace(/【场景】已核实事件([1234])/g, (_, n) =>
+    `【${["融资", "航天", "深海", "低空"][Number(n) - 1]}】机器人公司${n}完成新一轮融资`);
+  assert.match(validatePayload(financing, date), /融资.*3 条/);
+  const excluded = payload(date, 1).replace("已核实事件1", "视塔机器人完成天使轮融资");
+  assert.match(validatePayload(excluded, date), /用户剔除/);
 });
 
 test("relay requires a notice when there are no items", () => {

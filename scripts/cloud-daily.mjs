@@ -5,6 +5,7 @@ import { targetWindow, WINDOW_HOURS } from "./window.mjs";
 import { loadHistory } from "./history.mjs";
 import { normTitle } from "./collect.mjs";
 import { sourceError, publishedSourceError, isAllowedSourceUrl, payloadSourceError, SOURCES, accountPublisher } from "../lib/source-policy.js";
+import { excludedEventReason, topicLimitError, countTopics } from "../lib/editorial-policy.js";
 
 export const MAX_ITEMS = 6;
 export const TARGET_MIN = 3;
@@ -134,10 +135,20 @@ export async function buildDaily(date, model, { fetchPage = readPage, history = 
   if (!model || !Array.isArray(model.items)) throw new Error("模型输出缺少 items");
   const kept = [];
   const dropped = [];
+  const topics = new Map();
   const seen = { keys: new Set(), urls: new Set() };
   for (const candidate of model.items) {
     if (kept.length >= MAX_ITEMS) { dropped.push({ title: candidate?.title, url: candidate?.url, reason: "超过 6 条上限" }); continue; }
-    try { kept.push(await checkItem(candidate, window, fetchPage, seen, history)); }
+    try {
+      const exclusion = excludedEventReason(candidate);
+      if (exclusion) throw new Error(exclusion);
+      const item = await checkItem(candidate, window, fetchPage, seen, history);
+      const classified = { ...item, topic_group: candidate.topic_group };
+      const limitError = topicLimitError(classified, topics);
+      if (limitError) throw new Error(limitError);
+      countTopics(classified, topics);
+      kept.push(item);
+    }
     catch (error) { dropped.push({ title: candidate?.title, url: candidate?.url, reason: error.message }); }
   }
   const payload = formatPayload(date, kept);

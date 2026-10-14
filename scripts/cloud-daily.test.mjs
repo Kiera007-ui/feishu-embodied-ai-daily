@@ -58,7 +58,8 @@ test("items already pushed in the last three issues are dropped", async () => {
 });
 
 test("domain tags pass and more than six items are capped", async () => {
-  const items = Array.from({ length: 7 }, (_, i) => item(i + 1, { tag: i === 0 ? "深海" : "场景" }));
+  const tags = ["深海", "场景", "场景", "场景", "产品", "模型", "政策"];
+  const items = tags.map((tag, i) => item(i + 1, { tag }));
   const result = await buildDaily(DATE, model(items), { fetchPage: pages({}) });
   assert.equal(result.kept.length, 6);
   assert.match(result.payload, /^1\. 【深海】/m);
@@ -70,6 +71,53 @@ test("no qualified items produces an explicit notice", async () => {
   const result = await buildDaily(DATE, model([]), { fetchPage: pages({}) });
   assert.match(result.payload, /没有达到筛选标准/);
   assert.match(result.payload, /36 小时/);
+});
+
+test("topic cap keeps the editor-ranked three and allows other topics to fill slots", async () => {
+  const ranked = [4, 2, 1, 3].map(n => item(n, { tag: "融资", title: `机器人企业${n}完成新一轮融资` }));
+  ranked.push(item(5, { tag: "模型" }), item(6, { tag: "订单" }));
+  const result = await buildDaily(DATE, model(ranked), { fetchPage: pages({}) });
+  assert.deepEqual(result.kept.map(i => i.url), [4, 2, 1, 5, 6].map(n => `https://www.36kr.com/p/story-${n}`));
+  assert.match(result.dropped[0].reason, /融资.*3 条/);
+});
+
+test("domain tags and funding synonyms cannot hide a fourth financing event", async () => {
+  const tags = ["融资", "航天", "投融资", "深海"];
+  const result = await buildDaily(DATE, model(tags.map((tag, i) => item(i + 1, {
+    tag, title: `机器人企业${i + 1}完成新一轮融资`
+  }))), { fetchPage: pages({}) });
+  assert.equal(result.kept.length, 3);
+  assert.match(result.dropped[0].reason, /融资.*3 条/);
+});
+
+test("body-derived topic groups cap differently labelled events", async () => {
+  const tags = ["航天", "深海", "低空", "物流"];
+  const result = await buildDaily(DATE, model(tags.map((tag, i) => item(i + 1, {
+    tag, topic_group: "场景"
+  }))), { fetchPage: pages({}) });
+  assert.equal(result.kept.length, 3);
+  assert.match(result.dropped[0].reason, /场景.*3 条/);
+});
+
+test("invalid candidates do not consume topic quota", async () => {
+  const result = await buildDaily(DATE, model([
+    item(1, { evidence_quote: "正文不存在的摘录无法核查" }), item(2), item(3), item(4)
+  ]), { fetchPage: pages({}) });
+  assert.equal(result.kept.length, 3);
+  assert.equal(result.dropped.length, 1);
+  assert.match(result.dropped[0].reason, /事实摘录/);
+});
+
+test("the rejected Shita funding story is excluded across sources without excluding later orders", async () => {
+  const result = await buildDaily(DATE, model([
+    item(1, { title: "视塔机器人完成天使轮融资", source: "量子位", url: "https://www.qbitai.com/2026/10/shita.html" }),
+    item(2, { title: "其他标题也不能重新纳入该快讯", url: "https://www.36kr.com/newsflashes/4023871195467648" }),
+    item(3, { title: "视塔机器人获得新的批量交付订单", tag: "订单" })
+  ]), { fetchPage: pages({}) });
+  assert.equal(result.kept.length, 1);
+  assert.equal(result.dropped.length, 2);
+  assert.match(result.dropped[0].reason, /用户剔除/);
+  assert.match(result.kept[0].title, /订单/);
 });
 
 test("independent reports count distinct reachable hosts only", async () => {
