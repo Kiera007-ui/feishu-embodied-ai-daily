@@ -35,15 +35,18 @@ export const VERIFY_SCHEMA = obj({
 });
 const EDITOR_SCHEMA = obj({ order: arr(obj({ event_key: str, keep: { type: "boolean" }, reason: str })) });
 
-async function context(date) {
+export async function selectionContext(date) {
   const { start, end } = targetWindow(date);
   let focus = "";
   try {
     const configured = JSON.parse(await fs.readFile(new URL("../config/daily-focus.json", import.meta.url), "utf8"));
     if (configured.date === date) focus = configured.instructions || "";
   } catch {}
-  const rules = (await fs.readFile(new URL("../prompts/rules.md", import.meta.url), "utf8"))
+  let rules = (await fs.readFile(new URL("../prompts/rules.md", import.meta.url), "utf8"))
     .replaceAll("{{WINDOW_START}}", shanghaiTime(start)).replaceAll("{{WINDOW_END}}", shanghaiTime(end));
+  // Retain dated requirements through triage, verification and final editing.
+  // The date match above makes the focus expire without a cleanup job.
+  if (focus) rules += `\n\n## 本期定向关注（仅 ${date} 有效，不放宽上述硬约束）\n${focus}`;
   const cases = await fs.readFile(new URL("../prompts/cases.md", import.meta.url), "utf8");
   return { start, end, rules, cases, focus };
 }
@@ -68,11 +71,10 @@ async function pool(items, limit, worker) {
 }
 
 async function sweep(date, collected, ctx) {
-  const focus = ctx.focus ? "\n\n## 本期定向关注\n" + ctx.focus : "";
   const listed = collected.coverage.map(r => `${r.source}：${r.status}，列表 ${r.found} 篇，窗口内相关 ${r.relevant ?? 0} 篇`).join("\n");
   const known = collected.candidates.filter(c => c.in_window).map(c => `- ${c.title}（${c.source}）`).join("\n") || "（无）";
   const weak = collected.coverage.filter(r => REQUIRED_SOURCES.includes(r.source) && (r.status === "unreachable" || !r.relevant)).map(r => r.source);
-  const sourcesTask = `你在为《具身智能每日推》补充候选文章。${focus}\n程序从各来源文章列表采集的情况如下：
+  const sourcesTask = `你在为《具身智能每日推》补充候选文章。\n程序从各来源文章列表采集的情况如下：
 ${listed}
 
 请用网页搜索补查以下来源在窗口内发表的文章：
@@ -82,7 +84,7 @@ ${listed}
 
 已采集的窗口内候选（不必重复返回）：
 ${known}`;
-  const eventsTask = `你在为《具身智能每日推》补充候选文章。${focus}\n请仅在允许名单内媒体发布的网页中，检索窗口内具身智能及相关硬科技的新消息，覆盖：人形机器人、具身模型、灵巧手与核心部件、机器人融资/订单/量产/部署/上市、仓储物流与无人配送、深海/航天/低空智能装备、重要政策。名单是检索、核查和最终发布来源的硬边界，不能扩大为其他专业媒体。
+  const eventsTask = `你在为《具身智能每日推》补充候选文章。\n请仅在允许名单内媒体发布的网页中，检索窗口内具身智能及相关硬科技的新消息，覆盖：人形机器人、具身模型、灵巧手与核心部件、机器人融资/订单/量产/部署/上市、仓储物流与无人配送、深海/航天/低空智能装备、重要政策。名单是检索、核查和最终发布来源的硬边界，不能扩大为其他专业媒体。
 特别注意：
 - 标题和导语不点名“机器人”、但正文是机器人系统发布或部署的报道（例如在 IROS 等展会上同时发布本体、灵巧手、数据手套）。
 - 名单内媒体刊登的机器人新品、融资、订单报道，包括它们转载其他来源的内容；不要求独立采写。
@@ -222,7 +224,7 @@ export function coverageRows(collected, searched) {
 }
 
 export async function select(date, collected, { root = process.cwd() } = {}) {
-  const ctx = await context(date);
+  const ctx = await selectionContext(date);
   const history = await loadHistory(date, { root });
   const metas = [];
 
