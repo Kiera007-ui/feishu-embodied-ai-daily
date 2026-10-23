@@ -181,3 +181,15 @@ test("an embedded outside URL is dropped before a delivery claim can be made", a
   assert.match(result.dropped[0].reason, /outside/);
   assert.doesNotMatch(result.payload, /bloomberg/);
 });
+
+test("short news items need a stated high-value exception", async () => {
+  const flash = { url: "https://www.36kr.com/newsflashes/4036938630566789", source: "36氪" };
+  const result = await buildDaily(DATE, model([
+    item(1, flash),
+    item(2, { is_brief: true }),
+    item(3, { url: "https://www.36kr.com/newsflashes/1", brief_exception: "头部公司确认量产且给出具体产能，窗口内无完整报道" })
+  ]), { fetchPage: pages({}) });
+  assert.equal(result.kept.length, 1);
+  assert.match(result.dropped[0].reason, /短讯/);
+  assert.match(result.dropped[1].reason, /短讯/);
+});

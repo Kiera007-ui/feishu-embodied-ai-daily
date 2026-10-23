@@ -57,6 +57,16 @@ export function cleanCopy(value) {
     .trim();
 }
 
+// Short news items are excluded unless the selector recorded why this one is
+// important and concrete enough to stand alone.
+export function briefError(candidate) {
+  let path = "";
+  try { path = new URL(candidate.url).pathname; } catch {}
+  const brief = candidate.is_brief === true || /^\/newsflashes\//.test(path);
+  if (!brief) return null;
+  return [...String(candidate.brief_exception || "").trim()].length >= 12 ? null : "短讯信息量不足，且未说明属于高价值短讯";
+}
+
 async function checkItem(candidate, window, fetchPage, seen, history) {
   const tag = text(candidate.tag, "标签", 2, 6);
   if (!/^[\p{Script=Han}]{2,6}$/u.test(tag)) throw new Error("标签必须是 2–6 个汉字");
@@ -140,7 +150,7 @@ export async function buildDaily(date, model, { fetchPage = readPage, history = 
   for (const candidate of model.items) {
     if (kept.length >= MAX_ITEMS) { dropped.push({ title: candidate?.title, url: candidate?.url, reason: "超过 6 条上限" }); continue; }
     try {
-      const exclusion = excludedEventReason(candidate);
+      const exclusion = excludedEventReason(candidate) || briefError(candidate);
       if (exclusion) throw new Error(exclusion);
       const item = await checkItem(candidate, window, fetchPage, seen, history);
       const limitError = topicLimitError(item, topics);

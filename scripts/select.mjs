@@ -28,7 +28,7 @@ const TRIAGE_SCHEMA = obj({
 });
 export const VERIFY_SCHEMA = obj({
   decision: { type: "string", enum: ["include", "watch", "reject"] },
-  reason: str, event_key: str, tag: str, title: str, summary: str, source: str, url: str,
+  reason: str, is_brief: { type: "boolean" }, brief_exception: str, event_key: str, tag: str, title: str, summary: str, source: str, url: str,
   source_kind: { type: "string", enum: ["media", "company", "other"] },
   published_at: str, first_disclosed_at: str, evidence_quote: str,
   independent_reports: arr(str), heat_note: str
@@ -58,7 +58,7 @@ const historyBlock = history => history.length
 const brief = (c, chars) => ({
   title: c.title, source: c.source, author: c.author || undefined, synced_on_36kr: c.synced_on_36kr || undefined,
   url: c.url, published_at: c.published_at, time_precision: c.time_precision, engagement: c.engagement,
-  read_status: c.read_status || "not_read", text: (c.article_text || c.summary || "").slice(0, chars)
+  format: /36kr\.com\/newsflashes\//.test(c.url) ? "快讯" : undefined, read_status: c.read_status || "not_read", text: (c.article_text || c.summary || "").slice(0, chars)
 });
 
 async function pool(items, limit, worker) {
@@ -157,6 +157,7 @@ ${historyBlock(history)}
 - 只用名单内媒体报道评估热度，转载同一原始报道不算多家独立报道。
 decision：include（满足全部规则，写完整条目）；watch（值得跟进但暂无合格来源或时间无法确认）；reject（不符合规则）。reason 用一句话说明。
 不是 include 时，条目字段填空字符串、independent_reports 填空数组。source 和 source_kind 按刊登页面所属媒体填写，名单内刊登页填 media，不能填被转载的原始机构。independent_reports 只放允许名单内链接。
+is_brief：url 页面是短讯（36氪快讯、一两段的消息稿、会议发言摘录）时填 true。短讯一般 reject；先找同一事件在名单内的完整报道并改用它。只有符合规则中“高价值短讯”的条件且找不到完整报道时才 include，并在 brief_exception 写明为什么它重要且具体；否则 brief_exception 填空字符串。
 evidence_quote 必须从 url 页面原文逐字摘录。先读正文判断价值，按重要性规则剔除只有泛泛用途和研发方向的普通融资官宣，再根据有价值的核心内容选 tag。用航天、深海、低空等领域标签时，reason 必须指出正文中的具体能力、应用、订单、部署或产业化事实；不能只因公司属于该领域就改标签。
 
 ## 事件
@@ -174,10 +175,10 @@ async function editor(items, history, ctx) {
 ${historyBlock(history)}
 
 ## 任务
-你是主编。下面是逐条核查后可以入选的条目。请：去掉同一事件的重复条目和与前 3 期重复的条目；按重要性和热度排序；keep=true 的最多 8 条（程序还会逐条硬校验，最终最多发 6 条）。只按最终展示 tag 计数，每个标签最多保留 3 条；其余标签不额外占融资名额。先核查内容价值和标签依据，不能为了保留低价值融资稿而改标签；领域标签需有具体能力、应用、订单、部署或产业化事实支撑，仅有公司领域和泛泛研发方向时剔除。读摘要中的具体新事实，先比产业影响、产品能力、客户／订单／部署／量产证据，再考虑融资规模、估值变化，最后用热度辅助，剔除低价值官宣。超过三条的标签必须比较并在 reason 写出保留或剔除理由，不能机械保留前 3 条。不要改写条目内容。每条都要出现在 order 里，reason 一句话；领域标签条目同时说明正文依据。
+你是主编。下面是逐条核查后可以入选的条目。请：去掉同一事件的重复条目和与前 3 期重复的条目；按重要性和热度排序；keep=true 的最多 8 条（程序还会逐条硬校验，最终最多发 6 条）。只按最终展示 tag 计数，每个标签最多保留 3 条；其余标签不额外占融资名额。先核查内容价值和标签依据，不能为了保留低价值融资稿而改标签；领域标签需有具体能力、应用、订单、部署或产业化事实支撑，仅有公司领域和泛泛研发方向时剔除。读摘要中的具体新事实，先比产业影响、产品能力、客户／订单／部署／量产证据，再考虑融资规模、估值变化，最后用热度辅助，剔除低价值官宣。超过三条的标签必须比较并在 reason 写出保留或剔除理由，不能机械保留前 3 条。短讯条目（is_brief=true）只有 brief_exception 确实成立时才保留，宁缺毋滥。不要改写条目内容。每条都要出现在 order 里，reason 一句话；领域标签条目同时说明正文依据。
 
 ## 条目
-${JSON.stringify(items.map(i => ({ event_key: i.event_key, tag: i.tag, title: i.title, summary: i.summary, source: i.source, url: i.url, published_at: i.published_at, verification_reason: i.reason, heat_note: i.heat_note, independent_reports: i.independent_reports.length })), null, 1)}`;
+${JSON.stringify(items.map(i => ({ event_key: i.event_key, tag: i.tag, title: i.title, summary: i.summary, source: i.source, url: i.url, is_brief: i.is_brief, brief_exception: i.brief_exception, published_at: i.published_at, verification_reason: i.reason, heat_note: i.heat_note, independent_reports: i.independent_reports.length })), null, 1)}`;
   return runModel({ name: "editor", input, schema: EDITOR_SCHEMA, effort: "high", timeout: 10 * 60_000 });
 }
 
