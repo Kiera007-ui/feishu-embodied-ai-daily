@@ -3,7 +3,7 @@ import { runModel } from "./llm.mjs";
 import { readPage, plainText } from "./http.mjs";
 import { targetWindow, shanghaiTime } from "./window.mjs";
 import { REQUIRED_SOURCES, SEARCH_SOURCES, OPTIONAL_SOURCES, readCandidate } from "./collect.mjs";
-import { loadHistory } from "./history.mjs";
+import { loadHistory, RECENT_ISSUES } from "./history.mjs";
 import { sourceError } from "../lib/source-policy.js";
 
 // The selection runs in stages so each judgement gets its own search budget:
@@ -51,9 +51,13 @@ export async function selectionContext(date) {
   return { start, end, rules, cases, focus };
 }
 
-const historyBlock = history => history.length
-  ? history.map(h => `- ${h.date} 【${h.tag}】${h.title}：${h.summary.slice(0, 120)} ${h.url}`).join("\n")
-  : "（无记录）";
+const historyBlock = history => {
+  if (!history.length) return "（无记录）";
+  const recent = new Set([...new Set(history.map(h => h.date))].sort().reverse().slice(0, RECENT_ISSUES));
+  return history.map(h => recent.has(h.date)
+    ? `- ${h.date} 【${h.tag}】${h.title}：${h.summary.slice(0, 120)} ${h.url}`
+    : `- ${h.date} 【${h.tag}】${h.title} ${h.url}`).join("\n");
+};
 
 const brief = (c, chars) => ({
   title: c.title, source: c.source, author: c.author || undefined, synced_on_36kr: c.synced_on_36kr || undefined,
@@ -124,13 +128,13 @@ async function triage(date, candidates, history, ctx) {
 
 ${ctx.cases}
 
-## 前 3 期已推送
+## 近 30 天已推送（最近 3 期含摘要）
 ${historyBlock(history)}
 
 ## 任务
 下面是窗口内全部候选（含正文节选）。程序已确认这些文章的发布时间都在窗口内，不要再以发布时间为由剔除；只有正文明确显示核心事实在窗口开始前已经公开时，才按旧闻剔除。请：
 1. 把报道同一事件的候选归为一组，用一个简短英文 event_key 标识；
-2. 剔除明显超出范围、核心事实为旧闻、与前 3 期重复的候选，写进 rejected 并说明原因；
+2. 剔除明显超出范围、核心事实为旧闻、与近 30 天已推送内容重复的候选，写进 rejected 并说明原因；
 3. 对剩余事件按重要性和热度排序，选出最多 ${MAX_EVENTS} 个最值得逐个核查的事件，priority 用 1–5（5 最高）。
 宁可多留几个边缘事件交给下一步核查，也不要漏掉重要事件；目标是最终能有 3–6 条。候选足够时至少保留 8 个事件。公司自发内容也要保留为事件，下一步会去找媒体报道。
 candidate_urls 只能使用下列候选中的 url。
@@ -146,16 +150,16 @@ async function verifyEvent(event, byUrl, history, ctx) {
 
 ${ctx.cases}
 
-## 前 3 期已推送
+## 近 30 天已推送（最近 3 期含摘要）
 ${historyBlock(history)}
 
 ## 任务
 只核查下面这一个事件能否入选，并在能入选时写出条目。需要时联网检索：
-- 仅在允许名单内刊登的正文和往日报道中追溯核心事实的首次披露时间；无法确认则 watch，不去名单外补证；
+- 在允许名单内的往日报道和近 30 天已推送记录中查找窗口开始前是否已公开同一核心事实：找到就按旧闻 reject，first_disclosed_at 写最早报道时间；没找到就以本期刊登页发布时间作为首次披露时间，不能因“无法证明是首次”而 watch；不去名单外补证；
 - 按发布媒体判断来源，名单内转载可以入选，无需独立采写，不因引用彭博等名单外原始信源而排除；
 - 保留名单内刊登页；仅当另一名单内媒体有同文官网页时才可替换，绝不能追换到名单外原文；
 - 只用名单内媒体报道评估热度，转载同一原始报道不算多家独立报道。
-decision：include（满足全部规则，写完整条目）；watch（值得跟进但暂无合格来源或时间无法确认）；reject（不符合规则）。reason 用一句话说明。
+decision：include（满足全部规则，写完整条目）；watch（值得跟进但暂无合格来源或核心事实无法核实）；reject（不符合规则）。reason 用一句话说明。
 不是 include 时，条目字段填空字符串、independent_reports 填空数组。source 和 source_kind 按刊登页面所属媒体填写，名单内刊登页填 media，不能填被转载的原始机构。independent_reports 只放允许名单内链接。
 is_brief：url 页面是短讯（36氪快讯、一两段的消息稿、会议发言摘录）时填 true。短讯一般 reject；先找同一事件在名单内的完整报道并改用它。只有符合规则中“高价值短讯”的条件且找不到完整报道时才 include，并在 brief_exception 写明为什么它重要且具体；否则 brief_exception 填空字符串。
 evidence_quote 必须从 url 页面原文逐字摘录。先读正文判断价值，按重要性规则剔除只有泛泛用途和研发方向的普通融资官宣，再根据有价值的核心内容选 tag。用航天、深海、低空等领域标签时，reason 必须指出正文中的具体能力、应用、订单、部署或产业化事实；不能只因公司属于该领域就改标签。
@@ -171,11 +175,11 @@ ${JSON.stringify(articles, null, 1)}`;
 async function editor(items, history, ctx) {
   const input = `${ctx.rules}
 
-## 前 3 期已推送
+## 近 30 天已推送（最近 3 期含摘要）
 ${historyBlock(history)}
 
 ## 任务
-你是主编。下面是逐条核查后可以入选的条目。请：去掉同一事件的重复条目和与前 3 期重复的条目；按重要性和热度排序；keep=true 的最多 8 条（程序还会逐条硬校验，最终最多发 6 条）。只按最终展示 tag 计数，每个标签最多保留 3 条；其余标签不额外占融资名额。先核查内容价值和标签依据，不能为了保留低价值融资稿而改标签；领域标签需有具体能力、应用、订单、部署或产业化事实支撑，仅有公司领域和泛泛研发方向时剔除。读摘要中的具体新事实，先比产业影响、产品能力、客户／订单／部署／量产证据，再考虑融资规模、估值变化，最后用热度辅助，剔除低价值官宣。超过三条的标签必须比较并在 reason 写出保留或剔除理由，不能机械保留前 3 条。短讯条目（is_brief=true）只有 brief_exception 确实成立时才保留，宁缺毋滥。不要改写条目内容。每条都要出现在 order 里，reason 一句话；领域标签条目同时说明正文依据。
+你是主编。下面是逐条核查后可以入选的条目。请：去掉同一事件的重复条目和与近 30 天已推送重复的条目；按重要性和热度排序；keep=true 的最多 8 条（程序还会逐条硬校验，最终最多发 6 条）。只按最终展示 tag 计数，每个标签最多保留 3 条；其余标签不额外占融资名额。先核查内容价值和标签依据，不能为了保留低价值融资稿而改标签；领域标签需有具体能力、应用、订单、部署或产业化事实支撑，仅有公司领域和泛泛研发方向时剔除。读摘要中的具体新事实，先比产业影响、产品能力、客户／订单／部署／量产证据，再考虑融资规模、估值变化，最后用热度辅助，剔除低价值官宣。超过三条的标签必须比较并在 reason 写出保留或剔除理由，不能机械保留前 3 条。短讯条目（is_brief=true）只有 brief_exception 确实成立时才保留，宁缺毋滥。不要改写条目内容。每条都要出现在 order 里，reason 一句话；领域标签条目同时说明正文依据。
 
 ## 条目
 ${JSON.stringify(items.map(i => ({ event_key: i.event_key, tag: i.tag, title: i.title, summary: i.summary, source: i.source, url: i.url, is_brief: i.is_brief, brief_exception: i.brief_exception, published_at: i.published_at, verification_reason: i.reason, heat_note: i.heat_note, independent_reports: i.independent_reports.length })), null, 1)}`;

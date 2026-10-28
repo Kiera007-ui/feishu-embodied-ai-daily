@@ -6,6 +6,10 @@ import { shiftDate } from "./window.mjs";
 // daily records what it actually sent in sent/, and queue/ is no longer read
 // for dates after the switch (other tools may still write drafts there).
 export const SWITCH_DATE = "2026.10.12";
+// Dedup looks back 30 days so a fact pushed weeks ago is not pushed again when a
+// later article repeats it. The latest 3 issues are shown with summaries.
+export const HISTORY_DAYS = 30;
+export const RECENT_ISSUES = 3;
 
 export function parseIssue(text, date) {
   const lines = String(text || "").split(/\r?\n/).map(line => line.trim());
@@ -26,7 +30,7 @@ export function parseIssue(text, date) {
   return items;
 }
 
-export async function loadHistory(date, { days = 3, root = process.cwd() } = {}) {
+export async function loadHistory(date, { days = HISTORY_DAYS, root = process.cwd() } = {}) {
   const out = [];
   for (let i = 1; i <= days; i += 1) {
     const day = shiftDate(date, -i);

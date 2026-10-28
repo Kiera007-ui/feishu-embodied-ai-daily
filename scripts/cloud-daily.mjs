@@ -173,7 +173,7 @@ export function renderReport(date, collected, model, result) {
   if (result.coverage_issues.length) out.push(`覆盖缺口（不阻止发送）：${result.coverage_issues.join("；")}`);
   const m = model?.meta;
   if (m) {
-    out.push(`模型：${m.model}；联网搜索 ${m.searches} 次；补查新增候选 ${m.swept_added} 篇；核查事件 ${m.events} 个，通过 ${m.verified_included} 个；参考前 3 期 ${m.history} 条。`);
+    out.push(`模型：${m.model}；联网搜索 ${m.searches} 次；补查新增候选 ${m.swept_added} 篇；核查事件 ${m.events} 个，通过 ${m.verified_included} 个；参考近 30 天已推送 ${m.history} 条。`);
     out.push("", "| 步骤 | 用时（秒） | 搜索次数 |", "| --- | --- | --- |");
     for (const s of m.stages || []) out.push(`| ${cell(s.stage)} | ${cell(s.seconds)} | ${cell(s.searches)} |`);
   }
