@@ -1,0 +1,11 @@
+具身智能每日推｜2026.11.01
+
+1. 【产品】据报道Meta与傅利叶合作研发人形机器人，第二代原型已在推进
+10月31日，The Information援引知情人士披露，Meta与上海傅利叶智能合作，在约三个月内完成代号Max的人形机器人原型，并已着手第二代研发。报道涉及Meta借助现有机器人本体开展AI控制和家庭场景研究；但双方尚未公开确认合作，也未公布可独立核验的任务成功率或部署指标。机器人媒体RoboActu指出，现有信息只支持将其视为实验性项目，不能认定已进入产品化或商业交付。
+来源：RoboActu
+https://www.roboactu.fr/meta-humanoide-fourier-the-information/
+
+2. 【航天】谷歌在轨TPU首次运行Gemma 4并回传完整AI回答
+谷歌10月30日披露，Project Suncatcher试验卫星已完成在轨TPU启动，并由搭载的Gemma 4模型执行地面提示词、向地球回传完整生成结果。该卫星10月1日发射，搭载四颗TPU，供电能力约1千瓦；据TechCrunch报道，受功率限制，每次只能运行一颗TPU约20分钟。后续仍需检验辐射、散热与长期可靠性，谷歌计划2027年开展双星光通信验证；此次并非持续运行的太空数据中心。
+来源：TechCrunch
+https://techcrunch.com/2026/10/30/googles-first-data-center-satellite-is-online-and-writing-poetry/
