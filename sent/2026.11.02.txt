@@ -1,0 +1,16 @@
+具身智能每日推｜2026.11.02
+
+1. 【航天】谷歌TPU首次在轨运行Gemma 4
+谷歌与Planet合作的Project Suncatcher原型卫星于10月1日搭乘SpaceX Transporter-18入轨，近日首次让在轨TPU运行预置Gemma 4，并将生成的太空俳句回传地面。卫星搭载4颗TPU，但受供电限制一次只能启用1颗，单次运行约20分钟；后续将测试其在轨热应力和辐射环境下的表现。
+来源：机器之心
+https://www.jiqizhixin.com/articles/2026-10-31-9
+
+2. 【技术】星衍智能发布通用具身Harness框架Auriga
+星衍智能发布通用具身Harness框架Auriga，整合三维感知、动作表达、执行验证、在线恢复、任务状态管理。公司披露：基于GPT-6 Astra，以无目标任务预调优、无专家演示、单次执行、不重置环境的Zero-shot协议，RoboDojo 42项任务6300次测试平均成功率57.74%、平均过程评分64.00；RoboCasa365 Target50 250次测试总体成功率73.2%。
+来源：机器之心
+https://www.jiqizhixin.com/articles/2026-11-01-4
+
+3. 【合作】Meta与傅利叶合作打造Max人形机器人原型
+极客公园援引报道，Meta与傅利叶用约3个月打造Max人形机器人原型，身高约1.5米、重约48.1公斤，搭载英伟达Thor芯片，被Meta视为Muse模型的物理化身；双方已于2026年9月启动Max 2研发，但尚未确定上市时间，也不计划销售原型机。
+来源：极客公园
+https://www.geekpark.net/news/373243
