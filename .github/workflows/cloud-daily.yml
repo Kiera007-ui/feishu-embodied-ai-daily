@@ -20,12 +20,17 @@ on:
         description: "Issue date YYYY.MM.DD for dry replays (empty = today)"
         required: false
         default: ""
+      resend_from_run:
+        description: "Live resend of today's issue: run id of a checked run whose payload is sent again (skips selection and the already-sent guard)"
+        required: false
+        default: ""
   # Committing ops/dry-run.txt starts a dry run without sending.
   push:
     branches: [main]
     paths: ["ops/dry-run.txt"]
 
 permissions:
+  actions: read
   contents: write
   id-token: write
 
@@ -50,11 +55,13 @@ jobs:
         env:
           INPUT_MODE: ${{ inputs.mode }}
           INPUT_DATE: ${{ inputs.date }}
+          INPUT_RESEND: ${{ inputs.resend_from_run }}
         run: |
           set -euo pipefail
           TODAY="$(TZ=Asia/Shanghai date +%Y.%m.%d)"
           DATE="$TODAY"
           MODE=live
+          RESEND=false
           if [ "$GITHUB_EVENT_NAME" = "push" ]; then MODE=dry; fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             MODE="${INPUT_MODE:-dry}"
@@ -63,6 +70,12 @@ jobs:
                 echo "::error::Live runs can only send today's issue."; exit 1
               fi
               DATE="$INPUT_DATE"
+            fi
+            if [ -n "${INPUT_RESEND:-}" ]; then
+              if [ "$MODE" != "live" ] || [ "$DATE" != "$TODAY" ] || ! [[ "$INPUT_RESEND" =~ ^[0-9]+$ ]]; then
+                echo "::error::A resend must be a live run for today with a numeric run id."; exit 1
+              fi
+              RESEND=true
             fi
           fi
           SKIP=false
@@ -75,8 +88,8 @@ jobs:
               SKIP=true
               echo "Cloud daily is held for $DATE pending review."
             fi
-            if { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
-               { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
+            if [ "$RESEND" != "true" ] && { { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
+               { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; }; then
               SKIP=true
               echo "A send or send attempt already exists for $DATE."
             fi
@@ -84,7 +97,8 @@ jobs:
           echo "date=$DATE" >> "$GITHUB_OUTPUT"
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-          echo "date=$DATE mode=$MODE skip=$SKIP"
+          echo "resend=$RESEND" >> "$GITHUB_OUTPUT"
+          echo "date=$DATE mode=$MODE skip=$SKIP resend=$RESEND"
 
       - name: Wait until the 08:30 cutoff
         if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.mode == 'live'
@@ -104,7 +118,7 @@ jobs:
           node-version: 22
 
       - name: Require OpenAI API key
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.resend != 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
@@ -114,7 +128,7 @@ jobs:
           fi
 
       - name: Collect candidates from media sources
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.resend != 'true'
         env:
           DATE: ${{ steps.gate.outputs.date }}
         run: |
@@ -123,7 +137,7 @@ jobs:
           jq -r '.coverage[] | "\(.source): \(.status) \(.found) listed, \(.relevant) relevant"' /tmp/daily/collected.json
 
       - name: Search, group, verify and rank with the model
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.resend != 'true'
         env:
           DATE: ${{ steps.gate.outputs.date }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -134,7 +148,7 @@ jobs:
         run: node scripts/select.mjs "$DATE" /tmp/daily/collected.json /tmp/daily/model.json
 
       - name: Check every item against the rules
-        if: steps.gate.outputs.skip != 'true'
+        if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.resend != 'true'
         env:
           DATE: ${{ steps.gate.outputs.date }}
         run: |
@@ -148,6 +162,31 @@ jobs:
             cat /tmp/daily/payload.txt
             echo '~~~'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Load the checked payload to resend
+        if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.resend == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          run-id: ${{ inputs.resend_from_run }}
+          github-token: ${{ github.token }}
+          pattern: daily-${{ steps.gate.outputs.date }}-*
+          merge-multiple: true
+          path: /tmp/daily
+
+      - name: Confirm the resend payload
+        if: steps.gate.outputs.skip != 'true' && steps.gate.outputs.resend == 'true'
+        shell: bash
+        env:
+          DATE: ${{ steps.gate.outputs.date }}
+          SOURCE_RUN: ${{ inputs.resend_from_run }}
+        run: |
+          set -euo pipefail
+          test "$(head -n 1 /tmp/daily/payload.txt)" = "具身智能每日推｜$DATE"
+          COUNT="$(grep -Ec '^[0-9]+\. ' /tmp/daily/payload.txt || true)"
+          if [ "$COUNT" -lt 1 ]; then echo "::error::Run $SOURCE_RUN has no items to resend."; exit 1; fi
+          printf '\n补发：使用运行 %s 已核对的推送文本（%s 条）。\n' "$SOURCE_RUN" "$COUNT" >> /tmp/daily/report.md
+          echo "Resending $COUNT items checked in run $SOURCE_RUN"
+          cat /tmp/daily/payload.txt
 
       - name: Keep run files
         if: always() && steps.gate.outputs.skip != 'true'
@@ -163,6 +202,7 @@ jobs:
         shell: bash
         env:
           DATE: ${{ steps.gate.outputs.date }}
+          RESEND: ${{ steps.gate.outputs.resend }}
         run: |
           set -euo pipefail
           git fetch origin main
@@ -173,8 +213,8 @@ jobs:
             echo "Live delivery is disabled or held for $DATE."
             exit 0
           fi
-          if { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
-             { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; then
+          if [ "$RESEND" != "true" ] && { { [ -f state/last-success.json ] && [ "$(jq -r '.date // ""' state/last-success.json)" = "$DATE" ]; } ||
+             { [ -f state/last-attempt.json ] && [ "$(jq -r '.date // ""' state/last-attempt.json)" = "$DATE" ]; }; }; then
             echo "claimed=false" >> "$GITHUB_OUTPUT"
             echo "Another run claimed or sent $DATE."
             exit 0
