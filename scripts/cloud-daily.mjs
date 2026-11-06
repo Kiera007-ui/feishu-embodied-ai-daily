@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readPage, plainText, pageTitle } from "./http.mjs";
+import { readPageWithRetry, isNetworkFailure, plainText, pageTitle } from "./http.mjs";
 import { targetWindow, WINDOW_HOURS } from "./window.mjs";
 import { loadHistory } from "./history.mjs";
 import { normTitle } from "./collect.mjs";
@@ -96,7 +96,11 @@ async function checkItem(candidate, window, fetchPage, seen, history) {
   const evidence = text(candidate.evidence_quote, "事实摘录", 10, 180);
 
   const page = await fetchPage(item.url);
-  if (!page.ok) throw new Error(`链接打不开：HTTP ${page.status}`);
+  if (!page.ok) {
+    const error = new Error(`链接打不开：HTTP ${page.status}${isNetworkFailure(page) ? "（多次重试仍无响应，属于网络故障）" : ""}`);
+    error.network = isNetworkFailure(page);
+    throw error;
+  }
   const publisherError = publishedSourceError(item.source, item.url, page);
   if (publisherError) throw new Error(publisherError);
   const pageCopy = plainText(page.body);
@@ -140,7 +144,7 @@ export function coverageIssues(model) {
     .map(row => `${row.source}：${row.status === "unavailable" ? "列表读取失败且未检索" : "未留下检索记录"}`);
 }
 
-export async function buildDaily(date, model, { fetchPage = readPage, history = [] } = {}) {
+export async function buildDaily(date, model, { fetchPage = url => readPageWithRetry(url), history = [] } = {}) {
   const window = targetWindow(date);
   if (!model || !Array.isArray(model.items)) throw new Error("模型输出缺少 items");
   const kept = [];
@@ -158,16 +162,23 @@ export async function buildDaily(date, model, { fetchPage = readPage, history = 
       countTopics(item, topics);
       kept.push(item);
     }
-    catch (error) { dropped.push({ title: candidate?.title, url: candidate?.url, reason: error.message }); }
+    catch (error) { dropped.push({ title: candidate?.title, url: candidate?.url, reason: error.message, network: Boolean(error.network) }); }
   }
   const payload = formatPayload(date, kept);
   if (payload.length > 12000) throw new Error("推送文本超过中继长度上限");
-  return { payload, kept, dropped, coverage_issues: coverageIssues(model) };
+  // An empty issue caused by unreachable links is a technical failure. It must
+  // not be sent as "no qualified news"; the run fails so a later run retries.
+  const networkDrops = dropped.filter(d => d.network).length;
+  const blocked = !kept.length && networkDrops
+    ? `${networkDrops} 条入选内容因链接读取失败被剔除，剩余 0 条；判定为网络故障，本次不发送，等待后续运行重试`
+    : "";
+  return { payload, kept, dropped, coverage_issues: coverageIssues(model), blocked };
 }
 
 export function renderReport(date, collected, model, result) {
   const cell = v => String(v ?? "").replace(/\|/g, "/").replace(/\n/g, " ");
   const out = [`# 具身智能每日推运行报告 ${date}`, ""];
+  if (result?.blocked) out.push(`**未发送：${result.blocked}**`, "");
   out.push(`窗口：${collected?.window?.start} 至 ${collected?.window?.end}`, "");
   out.push(`入选 ${result.kept.length} 条；代码剔除 ${result.dropped.length} 条。`);
   if (result.coverage_issues.length) out.push(`覆盖缺口（不阻止发送）：${result.coverage_issues.join("；")}`);
@@ -216,6 +227,10 @@ async function main() {
   await fs.writeFile(path.join(outDir, "report.md"), renderReport(date, collected, model, result));
   await fs.writeFile(path.join(outDir, "result.json"), JSON.stringify(result, null, 2));
   console.log(`kept=${result.kept.length} dropped=${result.dropped.length} coverage_issues=${result.coverage_issues.length}`);
+  if (result.blocked) {
+    console.error(`::error::${result.blocked}`);
+    process.exitCode = 1;
+  }
 }
 
 if (process.argv[1]?.endsWith("cloud-daily.mjs")) {

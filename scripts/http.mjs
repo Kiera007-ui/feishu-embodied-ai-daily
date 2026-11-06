@@ -72,6 +72,22 @@ export async function readPage(url) {
   return fetchText(url);
 }
 
+// A status of 0 means curl got no response at all (timeout or dropped
+// connection). Those and server errors are often brief, so the final link
+// check tries again before treating a page as unreadable.
+export const isNetworkFailure = page => !page.ok && (page.status === 0 || page.status === 429 || page.status >= 500);
+
+export async function readPageWithRetry(url, { attempts = 3, delayMs = 5000, read = readPage } = {}) {
+  let page;
+  for (let i = 1; i <= attempts; i += 1) {
+    page = await read(url);
+    if (!isNetworkFailure(page) || i === attempts) break;
+    console.log(`[check] ${url} HTTP ${page.status}, retry ${i}/${attempts - 1}`);
+    await new Promise(resolve => setTimeout(resolve, delayMs * i));
+  }
+  return { ...page, attempts: page?.attempts ?? attempts };
+}
+
 export function postForm(url, form, { timeout = 25 } = {}) {
   return new Promise(resolve => {
     execFile(

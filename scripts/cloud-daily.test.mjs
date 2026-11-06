@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildDaily, coverageIssues } from "./cloud-daily.mjs";
+import { readPageWithRetry } from "./http.mjs";
 
 const DATE = "2026.10.09";
 const summary = "某具身机器人团队在真实仓储现场公布新的自主抓取流程，覆盖多种包装与摆放方式，并披露了连续运行的具体任务范围。报道描述了机器人如何感知、规划和完成操作，也列出目前仍需人工处理的例外情形。该进展体现从单项演示进入现场流程的变化，但尚无可独立核实的成本和故障率数据。";
@@ -192,4 +193,27 @@ test("short news items need a stated high-value exception", async () => {
   assert.equal(result.kept.length, 1);
   assert.match(result.dropped[0].reason, /短讯/);
   assert.match(result.dropped[1].reason, /短讯/);
+});
+
+test("an empty issue caused by unreachable links is blocked instead of sent", async () => {
+  const down = { ok: false, status: 0, body: "" };
+  const all = await buildDaily(DATE, model([item(1), item(2)]), { fetchPage: async () => down });
+  assert.equal(all.kept.length, 0);
+  assert.match(all.blocked, /网络故障/);
+  const some = await buildDaily(DATE, model([item(1), item(2)]), { fetchPage: pages({ "https://www.36kr.com/p/story-2": down }) });
+  assert.equal(some.kept.length, 1);
+  assert.equal(some.blocked, "");
+  const gone = await buildDaily(DATE, model([item(1)]), { fetchPage: async () => ({ ok: false, status: 404, body: "" }) });
+  assert.equal(gone.blocked, "");
+});
+
+test("link reading retries after a timeout but not after a 404", async () => {
+  let calls = 0;
+  const flaky = async () => (++calls < 3 ? { ok: false, status: 0, body: "" } : { ok: true, status: 200, body: "ok" });
+  assert.equal((await readPageWithRetry("https://www.36kr.com/p/1", { delayMs: 0, read: flaky })).ok, true);
+  assert.equal(calls, 3);
+  calls = 0;
+  const missing = async () => { calls += 1; return { ok: false, status: 404, body: "" }; };
+  await readPageWithRetry("https://www.36kr.com/p/1", { delayMs: 0, read: missing });
+  assert.equal(calls, 1);
 });
