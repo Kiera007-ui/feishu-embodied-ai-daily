@@ -1,9 +1,9 @@
 {
-  "date": "2026.11.22",
-  "sent_at": "2026-11-22T08:47:53+08:00",
-  "github_run_id": "44967767042",
-  "source_commit": "24e468971e90b9baebbcc872cd8861398ea6a8c5",
-  "payload_sha256": "35831d2b70378236951cbee4671b301fb5ce7979894232a17570c746457c9e32",
-  "item_count": 2,
+  "date": "2026.11.23",
+  "sent_at": "2026-11-23T08:44:32+08:00",
+  "github_run_id": "45090152977",
+  "source_commit": "d473f7fb314b6233b77e5cc270ef10f34e8562e0",
+  "payload_sha256": "d3117c20a27affd6cfa1f9311f67a1f97ea97e5776526e91542b11f445ba0cad",
+  "item_count": 1,
   "sent": true
 }
